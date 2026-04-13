@@ -1,0 +1,44 @@
+# Secrets & local config (use config.example.json as template)
+backend/config.json
+
+# Python
+backend/venv/
+backend/test_venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# User-uploaded images (runtime data)
+backend/uploads/
+backend/cropped/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE / Claude
+.claude/settings.local.json
+.vscode/
+.idea/
+.hermes/
+
+# Playwright test output
+playwright-report/
+test-results/
+
+# PGN game files (runtime data)
+backend/games/
+
+#node
+node_modules/

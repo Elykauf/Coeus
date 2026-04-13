@@ -1,0 +1,239 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header (merged with nav) ─────────────────────────────────────────── */
+header {
+  background: var(--header-bg, rgba(5, 5, 5, 0.8));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--header-border, rgba(255, 255, 255, 0.06));
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  padding: 0 var(--space-xl);
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.header-center {
+  display: flex;
+  align-items: center;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 100%;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Logo ─────────────────────────────────────────────────────────────── */
+header h1 {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+  margin: 0;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+}
+
+/* ── Breadcrumbs ──────────────────────────────────────────────────────── */
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.breadcrumbs .crumb-active {
+  color: var(--text-primary);
+}
+.breadcrumbs .crumb-sep {
+  color: var(--text-muted);
+  opacity: 0.4;
+  font-size: 10px;
+}
+
+/* ── Nav Tabs (centered, text-only) ───────────────────────────────────── */
+.nav-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 16px;
+  color: #888888;
+  text-decoration: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  transition: color 0.15s ease;
+  cursor: pointer;
+}
+
+.nav-tab:hover {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.nav-tab.active {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.nav-tab-disabled {
+  color: var(--border-std);
+  cursor: not-allowed;
+  user-select: none;
+}
+
+/* ── Sliding accent indicator (framer-motion) ──────────────────────────── */
+.nav-indicator {
+  position: absolute;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
+}
+
+/* ── Settings icon ────────────────────────────────────────────────────── */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  flex-shrink: 0;
+}
+.btn-icon:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+.btn-icon.active {
+  color: #000000;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.btn-import {
+  background: var(--accent);
+  color: #000;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  padding: 0;
+}
+.btn-import:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 12px rgba(0, 200, 5, 0.4);
+}
+
+/* ── Settings Dropdown ────────────────────────────────────────────────── */
+.settings-dropdown {
+  position: fixed;
+  top: 60px;
+  right: 24px;
+  width: 420px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-std);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  z-index: 200;
+  padding: var(--space-lg);
+}
+
+.settings-dropdown-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: var(--space-lg);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--border-dim);
+}
+
+/* ── Light mode overrides ─────────────────────────────────────────────── */
+[data-theme="light"] header h1 {
+  color: #166534;
+}
+
+[data-theme="light"] .nav-tab {
+  color: #555555;
+}
+
+[data-theme="light"] .nav-tab:hover {
+  color: #0d0d0d;
+}
+
+[data-theme="light"] .nav-tab.active {
+  color: #0d0d0d;
+}
+
+[data-theme="light"] .nav-tab-disabled {
+  color: #b0b0b0;
+}
+
+[data-theme="light"] .btn-ghost {
+  border-color: #166534;
+  color: #166534;
+}
+
+[data-theme="light"] .btn-ghost:hover {
+  background: rgba(22, 101, 52, 0.08);
+}
+
+[data-theme="light"] .btn-icon:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .btn-icon.active {
+  color: #ffffff;
+  border-color: #166534;
+  background: #166534;
+}
+
+/* ── Content ──────────────────────────────────────────────────────────── */
+.app-content {
+  flex: 1;
+  padding: var(--space-lg) var(--space-xl);
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+}
