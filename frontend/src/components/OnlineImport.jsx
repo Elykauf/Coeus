@@ -200,6 +200,7 @@ export default function OnlineImport() {
             for (let i = prev.length; i < merged.length; i++) next.add(i)
             return next
           })
+          setVisibleCount(v => v + newGames.length)
           return merged
         })
         setTotal(res.data.total ?? 0)
@@ -248,6 +249,7 @@ export default function OnlineImport() {
             for (let i = prev.length; i < merged.length; i++) next.add(i)
             return next
           })
+          setVisibleCount(v => v + newGames.length)
           return merged
         })
         setTotal(res.data.total ?? 0)
