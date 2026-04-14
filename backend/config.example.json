@@ -2,5 +2,9 @@
   "stockfish_path": "/usr/bin/stockfish",
   "gemini_api_key": "",
   "player_name": "",
-  "stockfish_threads": 1
+  "stockfish_threads": 1,
+  "stockfish_hash": 4096,
+  "stockfish_mode": "local",
+  "stockfish_url": "",
+  "stockfish_api_key": ""
 }

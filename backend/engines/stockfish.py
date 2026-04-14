@@ -1,17 +1,191 @@
 import re
 import chess
 import chess.engine
-from typing import List, Dict
+from typing import List, Dict, Optional
 import logging
 from pathlib import Path as FilePath
 
+class RemoteUciEngine:
+    """Wraps a remote UCI engine accessible via HTTP/WebSocket.
+    
+    Most cloud Stockfish servers expose a REST API. This adapter translates
+    the python-chess UCI calls into HTTP POST requests and parses responses.
+    
+    Expected remote API contract ( Lichance/Lichess-style ):
+        POST /api/analysis/evaluate
+        Body: {"fen": "..."}
+        Response: {"evaluation": {"value": 0.35}, "bestMove": "e2e4"}
+    """
+
+    def __init__(self, base_url: str, api_key: str = ""):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self._analysis_limit = chess.engine.Limit(time=2.0)
+        self._board = chess.Board()
+
+    def _headers(self) -> dict:
+        h = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"
+        return h
+
+    def configure(self, options: dict):
+        # Remote engines don't support local config like Threads/Hash
+        pass
+
+    def analyse(self, board: chess.Board, limit: chess.engine.Limit, *, multipv: int = 1, info: bool = True, _=None):
+        """Single-shot evaluation — yields one info dict then closes."""
+        import httpx
+        fen = board.fen()
+        try:
+            # Try common cloud Stockfish API shapes
+            with httpx.Client(timeout=30.0) as client:
+                # Shape 1: Lichance-style /api/analysis/evaluate
+                try:
+                    resp = client.post(
+                        f"{self.base_url}/api/analysis/evaluate",
+                        json={"fen": fen},
+                        headers=self._headers(),
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        eval_val = data.get("evaluation", {}).get("value", 0)
+                        best_move_uci = data.get("bestMove", "").get("uci", "")
+                        # Convert to centipawns
+                        cp = int(eval_val * 100) if isinstance(eval_val, (int, float)) else 0
+                        # Find the Move object
+                        best_move = None
+                        if best_move_uci:
+                            try:
+                                best_move = chess.Move.from_uci(best_move_uci)
+                            except Exception:
+                                pass
+                        if best_move is None and best_move_uci:
+                            # Try parsing as UCI and find matching legal move
+                            pass
+                        # Construct a python-chess score object
+                        class _Score:
+                            def __init__(self, cp_val):
+                                self._cp = cp_val
+                            def white(self):
+                                return self
+                            def score(self, mate_score=30000):
+                                return self._cp
+                            def mate(self):
+                                return None
+                        yield {
+                            "depth": 20,
+                            "score": _Score(cp),
+                            "pv": [best_move] if best_move else [],
+                            "nodes": 0,
+                            "nps": 0,
+                        }
+                        return
+                except Exception:
+                    pass
+
+                # Shape 2: generic {evaluation: "...", best_move: "..."}
+                resp = client.post(
+                    f"{self.base_url}/evaluate",
+                    json={"fen": fen},
+                    headers=self._headers(),
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    eval_str = data.get("evaluation", "0")
+                    bm_str = data.get("best_move", "") or data.get("bestMove", "")
+                    # Parse eval: could be "+0.35" or "0.35" or "M3"
+                    cp = 0
+                    if eval_str.startswith("M") or eval_str.startswith("-"):
+                        pass  # mate — not easily representable
+                    else:
+                        try:
+                            cp = int(float(eval_str) * 100)
+                        except Exception:
+                            cp = 0
+                    class _Score:
+                        def __init__(self, cp_val):
+                            self._cp = cp_val
+                        def white(self):
+                            return self
+                        def score(self, mate_score=30000):
+                            return self._cp
+                        def mate(self):
+                            return None
+                    best_move = None
+                    if bm_str:
+                        try:
+                            best_move = chess.Move.from_uci(bm_str)
+                        except Exception:
+                            pass
+                    yield {
+                        "depth": 20,
+                        "score": _Score(cp),
+                        "pv": [best_move] if best_move else [],
+                        "nodes": 0,
+                        "nps": 0,
+                    }
+                    return
+
+                # Shape 3: raw UCI over WebSocket (lichess style)
+                # Fallback — raise so caller knows nothing worked
+                raise RuntimeError(f"Remote engine at {self.base_url} did not match any known API shape (status {resp.status_code})")
+        except Exception as e:
+            logging.error(f"RemoteUciEngine analyse failed: {e}")
+            yield {"depth": 0, "score": None, "pv": [], "nodes": 0, "nps": 0}
+
+    def analysis(self, board: chess.Board, limit: chess.engine.Limit, *, multipv: int = 1, info: bool = True):
+        """Streaming analysis — returns a context manager yielding info dicts."""
+        return _RemoteAnalysisCtx(self, board, limit, multipv)
+
+    def quit(self):
+        pass
+
+
+class _RemoteAnalysisCtx:
+    """A minimal context-manager that mimics chess.engine.Analysis for RemoteUciEngine."""
+    def __init__(self, engine: RemoteUciEngine, board: chess.Board, limit: chess.engine.Limit, multipv: int):
+        self.engine = engine
+        self.board = board
+        self.limit = limit
+        self.multipv = multipv
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def __iter__(self):
+        # For streaming we just yield the single-shot result
+        for info in self.engine.analyse(self.board, self.limit, multipv=self.multipv):
+            yield info
+
+
 class StockfishAnalyzer:
-    def __init__(self, path_or_url: str = "/opt/homebrew/opt/stockfish/bin/stockfish", threads: int = 1, hash_size: int = 4096):
-        self.engine = chess.engine.SimpleEngine.popen_uci(path_or_url)
-        options = {"Hash": hash_size}
-        if threads > 1:
-            options["Threads"] = threads
-        self.engine.configure(options)
+    def __init__(
+        self,
+        path_or_url: str = "/opt/homebrew/opt/stockfish/bin/stockfish",
+        threads: int = 1,
+        hash_size: int = 4096,
+        *,
+        engine_mode: str = "local",  # "local" | "remote"
+        remote_api_key: str = "",
+    ):
+        self.engine_mode = engine_mode
+        self._threads = threads
+        self._hash_size = hash_size
+        self._path_or_url = path_or_url
+        self._remote_api_key = remote_api_key
+
+        if engine_mode == "remote":
+            self.engine: chess.engine.Protocol = RemoteUciEngine(path_or_url, api_key=remote_api_key)
+        else:
+            self.engine = chess.engine.SimpleEngine.popen_uci(path_or_url)
+            options = {"Hash": hash_size}
+            if threads > 1:
+                options["Threads"] = threads
+            self.engine.configure(options)
 
     def analyze_position(self, board: chess.Board) -> Dict:
         try:

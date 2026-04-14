@@ -7,6 +7,9 @@ const DEFAULT_CONFIG = {
   player_name: '',
   stockfish_threads: 1,
   stockfish_hash: 4096,
+  stockfish_mode: 'local',
+  stockfish_url: '',
+  stockfish_api_key: '',
 }
 
 function StatusMsg({ status }) {
@@ -44,6 +47,9 @@ function Config() {
         player_name: config.player_name,
         stockfish_threads: config.stockfish_threads,
         stockfish_hash: config.stockfish_hash,
+        stockfish_mode: config.stockfish_mode,
+        stockfish_url: config.stockfish_url,
+        stockfish_api_key: config.stockfish_api_key,
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -57,7 +63,10 @@ function Config() {
     try {
       const response = await axios.post('/api/config/test-stockfish', {
         stockfish_path: config.stockfish_path,
-        gemini_api_key: config.gemini_api_key
+        gemini_api_key: config.gemini_api_key,
+        stockfish_mode: config.stockfish_mode,
+        stockfish_url: config.stockfish_url,
+        stockfish_api_key: config.stockfish_api_key,
       })
       setStockfishStatus(response.data.status === 'success'
         ? { type: 'success', msg: response.data.message }
@@ -88,17 +97,72 @@ function Config() {
     <div>
 
       <div className="form-group">
-        <label>Stockfish Path</label>
-        <div className="input-row">
-          <input
-            type="text"
-            value={config.stockfish_path}
-            onChange={(e) => setConfig({ ...config, stockfish_path: e.target.value })}
-          />
-          <button className="btn btn-secondary" onClick={handleTestStockfish}>Test Engine</button>
+        <label>Stockfish Engine — Mode</label>
+        <div className="input-row" style={{ gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            className={`btn ${config.stockfish_mode === 'local' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setConfig(c => ({ ...c, stockfish_mode: 'local' }))}
+          >Local Binary</button>
+          <button
+            className={`btn ${config.stockfish_mode === 'remote' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setConfig(c => ({ ...c, stockfish_mode: 'remote' }))}
+          >Remote Server</button>
         </div>
-        <StatusMsg status={stockfishStatus} />
+        <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: 'var(--space-sm)' }}>
+          {config.stockfish_mode === 'local'
+            ? 'Use a local Stockfish binary installed on your machine.'
+            : 'Connect to a remote Stockfish server (e.g. Lichance, custom UCI endpoint).'}
+        </p>
       </div>
+
+      {config.stockfish_mode === 'local' ? (
+        <div className="form-group">
+          <label>Stockfish Path</label>
+          <div className="input-row">
+            <input
+              type="text"
+              value={config.stockfish_path}
+              onChange={(e) => setConfig({ ...config, stockfish_path: e.target.value })}
+            />
+            <button className="btn btn-secondary" onClick={handleTestStockfish}>Test Engine</button>
+          </div>
+          <StatusMsg status={stockfishStatus} />
+        </div>
+      ) : (
+        <div className="form-group">
+          <label>Stockfish Server URL</label>
+          <div className="input-row">
+            <input
+              type="text"
+              value={config.stockfish_url}
+              onChange={(e) => setConfig({ ...config, stockfish_url: e.target.value })}
+              placeholder="https://your-stockfish-server.com"
+            />
+            <button className="btn btn-secondary" onClick={handleTestStockfish}>Test Engine</button>
+          </div>
+          <StatusMsg status={stockfishStatus} />
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: 'var(--space-sm)' }}>
+            Base URL of your remote Stockfish server. Must expose a UCI-over-HTTP API.
+          </p>
+        </div>
+      )}
+
+      {config.stockfish_mode === 'remote' && (
+        <div className="form-group">
+          <label>API Key <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span></label>
+          <div className="input-row">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={config.stockfish_api_key}
+              onChange={(e) => setConfig({ ...config, stockfish_api_key: e.target.value })}
+              placeholder="Bearer token for authenticated servers"
+            />
+          </div>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: 'var(--space-sm)' }}>
+            Sent as <span style={{ color: 'var(--accent-gold)' }}>Authorization: Bearer &lt;key&gt;</span> header.
+          </p>
+        </div>
+      )}
 
       <div className="form-group">
         <label>CPU Threads — <span style={{ color: 'var(--accent-gold)', fontWeight: 700 }}>{config.stockfish_threads}</span></label>

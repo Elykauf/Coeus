@@ -23,6 +23,7 @@ import time as time_mod
 from engines.stockfish import StockfishAnalyzer
 from engines.gemini_ocr import extract_pgn_from_image, extract_timestamps_from_image
 from database import init_db, save_game, list_games, get_game as db_get_game, delete_game, update_game_meta, get_opening_tree, get_games_for_move, update_move_comment, update_move_key_moment, get_move_annotations, add_variation, get_variations, delete_variation, DB_PATH
+from utils.cheat_detector import compute_cheat_report, CheatReport
 
 app = FastAPI(title="Chess scoresheet Digitizer")
 
@@ -65,6 +66,9 @@ class ConfigBase(BaseModel):
     player_name: str = ""
     stockfish_threads: int = 1
     stockfish_hash: int = 4096
+    stockfish_mode: str = "local"   # "local" | "remote"
+    stockfish_url: str = ""         # remote server URL when mode == "remote"
+    stockfish_api_key: str = ""     # optional API key for remote server
 
 class ValidateRequest(BaseModel):
     moves: List[str]
@@ -98,6 +102,9 @@ def get_config():
         "player_name": "",
         "stockfish_threads": 1,
         "stockfish_hash": 4096,
+        "stockfish_mode": "local",
+        "stockfish_url": "",
+        "stockfish_api_key": "",
     }
     if config_path.exists():
         with open(config_path, "r") as f:
@@ -108,6 +115,29 @@ def get_config():
                     loaded[key] = default[key]
             return loaded
     return default
+
+
+def _build_stockfish(config: dict = None) -> Optional[StockfishAnalyzer]:
+    """Factory that creates a StockfishAnalyzer from a config dict (or current config file)."""
+    if config is None:
+        config = get_config()
+    mode = config.get("stockfish_mode", "local")
+    if mode == "remote":
+        url = config.get("stockfish_url", "")
+        if not url:
+            return None
+        return StockfishAnalyzer(
+            path_or_url=url,
+            engine_mode="remote",
+            remote_api_key=config.get("stockfish_api_key", ""),
+        )
+    else:
+        return StockfishAnalyzer(
+            path_or_url=config.get("stockfish_path", "/usr/local/bin/stockfish"),
+            threads=int(config.get("stockfish_threads", 1)),
+            hash_size=int(config.get("stockfish_hash", 4096)),
+        )
+
 
 def _pgn_to_game_json(pgn_text: str, analysis: list, title: str = "") -> dict:
     """Convert PGN + analysis array into the canonical game JSON format."""
@@ -269,6 +299,58 @@ def db_delete_game(game_id: int):
     return {"status": "success"}
 
 
+@app.post("/api/db/games/{game_id}/reanalyze")
+def db_reanalyze_game(game_id: int):
+    """Clear analysis data and re-run Stockfish with the stored depth setting."""
+    import time as _time
+
+    game = db_get_game(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    pgn_text = game.get("raw_pgn", "")
+    if not pgn_text:
+        raise HTTPException(status_code=400, detail="No PGN available for this game")
+
+    depth = game.get("analysis_depth", "Standard")
+    depth_map = {
+        'Fast': 2.0,
+        'Standard': 10.0,
+        'Deep': 30.0
+    }
+    time_limit = depth_map.get(depth, 10.0)
+
+    config = get_config()
+    global stockfish
+    if stockfish is None:
+        stockfish = _build_stockfish(config)
+
+    # Clear existing move analysis
+    from database import _get_db
+    conn = _get_db()
+    conn.execute("DELETE FROM game_moves WHERE game_id=?", (game_id,))
+    conn.commit()
+    conn.close()
+
+    # Run analysis
+    analysis_results = stockfish.analyze_full_game(pgn_text, time_limit=time_limit)
+    annotated_pgn = _embed_analysis_in_pgn(pgn_text, analysis_results)
+    _save_pgn_file(game.get("title", "game"), annotated_pgn)
+    game_json = _pgn_to_game_json(pgn_text, analysis_results, game.get("title", ""))
+
+    if game_json:
+        game_json["uuid"] = game.get("uuid")
+        save_game(game_json, analysis_depth=depth)
+
+    return {
+        "status": "success",
+        "game_id": game_id,
+        "analysis": analysis_results,
+        "depth": depth,
+        "time_limit": time_limit,
+    }
+
+
 @app.get("/api/db/opening-tree")
 def db_opening_tree(fen: str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"):
     config = get_config()
@@ -316,6 +398,59 @@ def db_delete_variation(variation_id: int):
     return {"status": "success"}
 
 
+# ── Fair Play Audit ────────────────────────────────────────────────────────────
+
+class CheatReportRequest(BaseModel):
+    game_id: int
+    side: str = "opponent"  # "opponent" or "self"
+
+class CheatReportResponse(BaseModel):
+    fairness_score: float
+    fairness_label: str
+    luck_score: float
+    accuracy_variance: float
+    time_correlation: float
+    perfect_streak_max: int
+    phase_accuracy: dict
+    premove_count: int
+    flagged_move_count: int
+    flagged_moves: list
+    summary: str
+
+
+@app.post("/api/analyze/cheat-report", response_model=CheatReportResponse)
+def get_cheat_report(req: CheatReportRequest):
+    """Compute a fair-play audit report for one side of a game.
+
+    side='opponent': analyze Black's half (even ply numbers)
+    side='self':     analyze White's half (odd ply numbers)
+    """
+    game = db_get_game(req.game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    all_moves = game.get("moves") or []
+
+    # White moves: odd plies (1,3,5...), Black moves: even plies (2,4,6...)
+    white_moves = [m for m in all_moves if (m.get("ply") or 0) % 2 == 1]
+    black_moves = [m for m in all_moves if (m.get("ply") or 0) % 2 == 0]
+
+    if req.side == "opponent":
+        target_moves = black_moves
+        comparative_moves = white_moves
+    else:
+        target_moves = white_moves
+        comparative_moves = black_moves
+
+    report = compute_cheat_report(
+        analysis=target_moves,
+        side=req.side,
+        player_moves=comparative_moves,
+    )
+
+    return CheatReportResponse(**report.to_dict())
+
+
 # ── Config ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/config")
@@ -333,24 +468,29 @@ def update_config(config: ConfigBase):
         except Exception:
             pass
         stockfish = None
-    try:
-        stockfish = StockfishAnalyzer(path_or_url=config.stockfish_path, threads=config.stockfish_threads, hash_size=config.stockfish_hash)
-    except Exception:
-        stockfish = None  # Will be re-initialized on next use
+    stockfish = _build_stockfish(config.dict())
     return {"status": "success"}
 
 @app.post("/api/config/test-stockfish")
 def test_stockfish(config: ConfigBase):
     try:
-        temp_analyzer = StockfishAnalyzer(path_or_url=config.stockfish_path)
+        mode = getattr(config, "stockfish_mode", "local")
+        if mode == "remote":
+            temp_analyzer = StockfishAnalyzer(
+                path_or_url=config.stockfish_url,
+                engine_mode="remote",
+                remote_api_key=getattr(config, "stockfish_api_key", ""),
+            )
+        else:
+            temp_analyzer = StockfishAnalyzer(path_or_url=config.stockfish_path)
         board = chess.Board("8/8/8/4p1K1/2k1P3/8/8/8 b")
         eval_dict = temp_analyzer.analyze_position(board)
         temp_analyzer.close()
-        
+
         if eval_dict.get("score") is not None:
              score_val = eval_dict["score"].relative.score()
              return {
-                 "status": "success", 
+                 "status": "success",
                  "message": f"Stockfish operational. Eval for test FEN: {score_val/100:.1f}",
                  "eval": score_val
              }
@@ -560,7 +700,7 @@ def suggest_moves(fen: str = Form(...)):
     global stockfish
     config = get_config()
     if stockfish is None:
-        stockfish = StockfishAnalyzer(path_or_url=config["stockfish_path"], threads=int(config.get("stockfish_threads", 1)), hash_size=int(config.get("stockfish_hash", 4096)))
+        stockfish = _build_stockfish(config)
     try:
         board = chess.Board(fen)
         infos = stockfish.engine.analyse(board, chess.engine.Limit(time=1.0), multipv=3)
@@ -592,7 +732,7 @@ def evaluate_position(fen: str = Form(...), time_limit: float = Form(2.0)):
     global stockfish
     config = get_config()
     if stockfish is None:
-        stockfish = StockfishAnalyzer(path_or_url=config["stockfish_path"], threads=int(config.get("stockfish_threads", 1)), hash_size=int(config.get("stockfish_hash", 4096)))
+        stockfish = _build_stockfish(config)
     try:
         board = chess.Board(fen)
         # Use time limit instead of depth
@@ -695,7 +835,7 @@ async def websocket_evaluate(websocket: WebSocket):
 
             config = get_config()
             if stockfish is None:
-                stockfish = StockfishAnalyzer(path_or_url=config["stockfish_path"], threads=int(config.get("stockfish_threads", 1)), hash_size=int(config.get("stockfish_hash", 4096)))
+                stockfish = _build_stockfish(config)
 
             board = chess.Board(fen)
             queue: asyncio.Queue = asyncio.Queue()
@@ -753,8 +893,8 @@ async def websocket_full_analysis(websocket: WebSocket):
 
         config = get_config()
         if stockfish is None:
-            stockfish = StockfishAnalyzer(path_or_url=config["stockfish_path"], threads=int(config.get("stockfish_threads", 1)), hash_size=int(config.get("stockfish_hash", 4096)))
-        
+            stockfish = _build_stockfish(config)
+
         # Save PGN
         games_dir = Path("games")
         games_dir.mkdir(exist_ok=True)
@@ -915,8 +1055,8 @@ def import_pgn(data: dict):
     global stockfish
     config = get_config()
     if stockfish is None:
-        stockfish = StockfishAnalyzer(path_or_url=config["stockfish_path"], threads=int(config.get("stockfish_threads", 1)), hash_size=int(config.get("stockfish_hash", 4096)))
-    
+        stockfish = _build_stockfish(config)
+
     try:
         analysis_results = stockfish.analyze_full_game(pgn_text, time_limit=time_limit)
         annotated_pgn = _embed_analysis_in_pgn(pgn_text, analysis_results)
@@ -1330,11 +1470,7 @@ def _run_queue_job(job: dict, cancel: threading.Event):
 
     config = get_config()
     if _queue_sf is None:
-        _queue_sf = StockfishAnalyzer(
-            path_or_url=config["stockfish_path"],
-            threads=int(config.get("stockfish_threads", 1)),
-            hash_size=int(config.get("stockfish_hash", 4096))
-        )
+        _queue_sf = _build_stockfish(config)
 
     tl = {"Fast": 0.5, "Standard": 2.0, "Deep": 10.0}.get(job["depth"], 2.0)
 

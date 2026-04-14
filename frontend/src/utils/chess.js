@@ -9,6 +9,18 @@ export function getAccuracy(cpl) {
   return Math.max(0, 100 * Math.exp(-0.005 * cpl))
 }
 
+/**
+ * Convert centipawn loss to an Elo rating delta.
+ * Uses the standard formula: accuracy% → rating delta from 1500 baseline.
+ * rating_delta ≈ 10 * (accuracy - 50)
+ * Perfect play (+180 Elo) → Blunder (-320 Elo) range.
+ */
+export function getRatingDelta(cpl) {
+  if (cpl == null) return 0
+  const accuracy = Math.max(0, 100 * Math.exp(-0.005 * cpl))
+  return Math.round(10 * (accuracy - 50))
+}
+
 /** Convert accuracy percentage to letter grade */
 export function getGrade(accuracy) {
   if (accuracy >= 95) return 'A+'

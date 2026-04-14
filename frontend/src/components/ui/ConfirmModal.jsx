@@ -1,7 +1,7 @@
 // ── ConfirmModal ─────────────────────────────────────────────────────────────
 // Generic confirmation dialog for destructive actions.
 
-export default function ConfirmModal({ title, message, onConfirm, onCancel }) {
+export default function ConfirmModal({ title, message, onConfirm, onCancel, confirmLabel = 'Delete' }) {
   return (
     <div
       style={{
@@ -15,7 +15,7 @@ export default function ConfirmModal({ title, message, onConfirm, onCancel }) {
         <div style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 'var(--space-lg)' }}>{message}</div>
         <div style={{ display: 'flex', gap: 'var(--space-sm)', justifyContent: 'flex-end' }}>
           <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
-          <button className="btn btn-danger" onClick={onConfirm}>Delete</button>
+          <button className="btn btn-danger" onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
     </div>

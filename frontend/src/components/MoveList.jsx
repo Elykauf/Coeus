@@ -77,7 +77,7 @@ export default function MoveList({
         Moves
       </h3>
 
-      <div style={{ overflowY: 'auto', flex: 1 }}>
+      <div style={{ overflowY: 'auto', flex: 1, position: 'relative', background: 'var(--bg-surface)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <tbody>
             {moveRows.map((row, rowIdx) => {

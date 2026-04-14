@@ -253,6 +253,8 @@ def save_game(game_json: dict, analysis_depth: str = None) -> int:
     moves = game_json.get("moves", [])
     last_fen = moves[-1].get("fenAfter", "") if moves else ""
 
+    depth = analysis_depth or game_json.get("analysis_depth", "")
+
     row_cols = (
         game_json.get("title", ""),
         meta.get("event", ""),
@@ -264,13 +266,13 @@ def save_game(game_json: dict, analysis_depth: str = None) -> int:
         meta.get("eco", ""),
         meta.get("timeControl", ""),
         json.dumps(game_json),
+        depth,
         raw_pgn,
         opening,
         last_fen,
     )
 
     title = game_json.get("title", "")
-    depth = analysis_depth or game_json.get("analysis_depth", "")
 
     # Match by UUID first, then fall back to title (case-insensitive, catches re-imports)
     existing = conn.execute("SELECT id FROM games WHERE uuid=?", (game_uuid,)).fetchone()
@@ -288,7 +290,7 @@ def save_game(game_json: dict, analysis_depth: str = None) -> int:
                    result=?, eco=?, time_control=?, data=?, analysis_depth=?,
                    raw_pgn=?, opening=?, last_fen=?, updated_at=?
                WHERE id=?""",
-            (game_uuid,) + row_cols + (depth, now, game_id),
+            (game_uuid,) + row_cols + (now, game_id),
         )
         # Only replace moves if new analysis data is actually provided;
         # otherwise preserve the existing engine evaluation (eval_cp, cpl).
@@ -300,7 +302,7 @@ def save_game(game_json: dict, analysis_depth: str = None) -> int:
                    (uuid, title, event, site, date, white, black, result, eco, time_control,
                     data, analysis_depth, raw_pgn, opening, last_fen, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (game_uuid,) + row_cols + (depth, now, now),
+            (game_uuid,) + row_cols + (now, now),
         )
         game_id = cursor.lastrowid
 
@@ -351,16 +353,16 @@ def list_games(
 
 def get_game(game_id: int) -> Optional[Dict]:
     conn = _get_db()
-    row = conn.execute("SELECT uuid, data FROM games WHERE id = ?", (game_id,)).fetchone()
+    row = conn.execute("SELECT uuid, raw_pgn, analysis_depth, data FROM games WHERE id = ?", (game_id,)).fetchone()
     conn.close()
     if not row:
         return None
     data = json.loads(row["data"])
     # Always surface the authoritative uuid column so the frontend can use it for upserts
     data["uuid"] = row["uuid"]
-    # Ensure raw_pgn is bubbled up for the frontend if present in the data payload
-    if "raw_pgn" in data:
-        data["raw_pgn"] = data["raw_pgn"]
+    # Surface raw_pgn and analysis_depth for reanalysis
+    data["raw_pgn"] = row["raw_pgn"] or data.get("raw_pgn", "")
+    data["analysis_depth"] = row["analysis_depth"] or data.get("analysis_depth", "")
     return data
 
 

@@ -214,7 +214,7 @@ function QueuePanel({ setAnalysis }) {
 
   return (
     <div
-      style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 500 }}
+      style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 500, display: 'flex', flexDirection: 'column', gap: 10 }}
       onMouseEnter={() => setExpanded(true)}
       onMouseLeave={() => setExpanded(false)}
     >
@@ -224,7 +224,6 @@ function QueuePanel({ setAnalysis }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)' }}>
             <span style={{ fontWeight: 700, fontSize: 14 }}>Analysis Queue</span>
           </div>
-
           {jobs.map((job, i) => (
             <div key={job.job_id} style={{ paddingBottom: 'var(--space-sm)', marginBottom: 'var(--space-sm)', borderBottom: i < jobs.length - 1 ? '1px solid var(--border-dim)' : 'none' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -266,16 +265,17 @@ function QueuePanel({ setAnalysis }) {
           ))}
         </div>
       )}
-
-      {/* Floating toggle button */}
-      <button
+{/* Floating toggle button */}
+<div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+<button
         className="btn btn-primary"
-        style={{ borderRadius: 20, padding: '7px 18px', fontSize: 13, fontWeight: 600, boxShadow: '0 4px 20px rgba(0,0,0,0.4)', minWidth: 140 }}
+        style={{ borderRadius: 20, maxWidth: "140px", padding: '7px 18px', fontSize: 13, fontWeight: 600, boxShadow: '0 4px 20px rgba(0,0,0,0.4)', minWidth: 140 }}
       >
         {analyzing
           ? `Analyzing… ${analyzing.progress?.percent ?? 0}%`
           : `Queue · ${activeCount} pending`}
       </button>
+    </div>
     </div>
   )
 }

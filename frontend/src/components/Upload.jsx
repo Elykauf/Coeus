@@ -462,31 +462,8 @@ function Upload({ setAnalysis }) {
               {pgn && <ScoreSheetInput pgn={pgn} setPgn={setPgn} gameId={savedGameId} gameUuid={gameUuid} initialTitle={title || null} />}
             </div>
           </div>
-
-          <div className="card" style={{ marginTop: 'var(--space-xl)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <h3>Export / Import PGN</h3>
-              <button 
-                className="btn btn-secondary" 
-                style={{ fontSize: '12px' }}
-                onClick={() => {
-                  navigator.clipboard.writeText(pgn);
-                  toast.success("PGN copied to clipboard!");
-                }}
-              >
-                Copy
-              </button>
-            </div>
-            <textarea 
-              value={pgn} 
-              onChange={(e) => setPgn(e.target.value)}
-              placeholder="Paste PGN here to import, or copy from here to export..."
-              style={{ width: '100%', height: '120px', fontFamily: 'monospace', fontSize: '14px', background: 'var(--bg-app)', color: 'var(--text-primary)', border: '1px solid var(--border-dim)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-sm)' }} 
-            />
-          </div>
         </>
       )}
-      {/* Modal removed */}
     </div>
   )
 }
