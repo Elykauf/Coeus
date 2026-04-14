@@ -109,6 +109,7 @@ export default function OnlineImport() {
   const [selected, setSelected]           = useState(new Set())
   const [total, setTotal]                 = useState(0)
   const [loadingMore, setLoadingMore]     = useState(false)
+  const [visibleCount, setVisibleCount]   = useState(20)
   const observerRef = useRef(null)
   // Stable refs needed inside the sentinel callback
   const gamesRef = useRef(games)
@@ -128,6 +129,7 @@ export default function OnlineImport() {
     setGames([])
     setSelected(new Set())
     setTotal(0)
+    setVisibleCount(20)
     setImportResult(null)
     setError(null)
   }
