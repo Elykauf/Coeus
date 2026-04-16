@@ -12,6 +12,12 @@ const LABEL_CONFIG = {
   NO_DATA:            { color: '#8b92b0', bg: 'rgba(139,146,176,0.12)', border: 'rgba(139,146,176,0.4)', icon: '—' },
 }
 
+const CONFIDENCE_CHIP = {
+  low:    { label: 'Low',    color: '#4caf8c', bg: 'rgba(76,175,140,0.18)'  },
+  medium: { label: 'Medium', color: '#F59E0B', bg: 'rgba(245,158,11,0.18)'  },
+  high:   { label: 'High',   color: '#EF4444', bg: 'rgba(239,68,68,0.18)'   },
+}
+
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
 function FlagHistoryGraph({ history }) {
@@ -139,6 +145,17 @@ export default function FairPlayPanel({ gameId, opponentSide, opponentColor }) {
         <span style={{ fontWeight: 700, color: config.color, fontSize: 13 }}>
           {opponentColor} Fair Play: {report?.fairness_label || '…'}
         </span>
+        {report?.confidence && (() => {
+          const chip = CONFIDENCE_CHIP[report.confidence] || CONFIDENCE_CHIP.low
+          return (
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
+              color: chip.color, background: chip.bg, letterSpacing: '0.04em',
+            }}>
+              {chip.label}
+            </span>
+          )
+        })()}
         {report && (
           <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
             score {report.fairness_score?.toFixed(2)}
@@ -194,6 +211,23 @@ export default function FairPlayPanel({ gameId, opponentSide, opponentColor }) {
                 </div>
               </div>
 
+              {/* Rating baseline delta */}
+              {report.baseline && (
+                <div style={{
+                  background: 'var(--bg-elevated)', borderRadius: 6, padding: '8px 12px',
+                  marginBottom: 'var(--space-md)', fontSize: 12,
+                }}>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    Expected CPL at rated level: <strong>{report.baseline.expected_cpl}</strong>
+                    {' · '}Observed: <strong>{Math.round(report.baseline.observed_cpl ?? 0)}</strong>
+                    {' · '}
+                  </span>
+                  <span style={{ color: report.baseline.over_performance ? '#EF4444' : '#4caf8c', fontWeight: 600 }}>
+                    {report.baseline.cpl_zscore?.toFixed(1)}σ {report.baseline.over_performance ? 'above expectation' : 'within expectation'}
+                  </span>
+                </div>
+              )}
+
               {/* Instant moves count */}
               {report.premove_count > 0 && (
                 <div style={{
@@ -229,6 +263,15 @@ export default function FairPlayPanel({ gameId, opponentSide, opponentColor }) {
               </div>
             </>
           )}
+
+          {/* Disclaimer — always shown when panel is expanded */}
+          <div style={{
+            marginTop: 'var(--space-md)', fontSize: 11, color: 'var(--text-muted)',
+            lineHeight: 1.5, fontStyle: 'italic', borderTop: '1px solid var(--border)',
+            paddingTop: 'var(--space-sm)',
+          }}>
+            {report?.disclaimer || 'This report is a statistical indicator only. It is not proof of cheating and must not be used to publicly accuse any player. If you believe misconduct occurred, please report through official channels.'}
+          </div>
         </div>
       )}
     </div>

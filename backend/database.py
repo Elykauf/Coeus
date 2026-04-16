@@ -197,6 +197,27 @@ def init_db():
     except Exception:
         pass  # Table already exists
 
+    # Create cheat_reports table
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS cheat_reports (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id      INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+                side         TEXT    NOT NULL,
+                player_rating INTEGER,
+                fairness_score REAL  NOT NULL,
+                confidence   TEXT    NOT NULL,
+                report_json  TEXT    NOT NULL,
+                created_at   REAL    NOT NULL,
+                UNIQUE(game_id, side)
+            );
+            CREATE INDEX IF NOT EXISTS idx_cheat_reports_confidence ON cheat_reports(confidence);
+            CREATE INDEX IF NOT EXISTS idx_cheat_reports_game ON cheat_reports(game_id);
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
     conn.close()
 
 
@@ -538,3 +559,63 @@ def delete_variation(variation_id: int):
     conn.execute("DELETE FROM move_variations WHERE id=?", (variation_id,))
     conn.commit()
     conn.close()
+
+
+def upsert_cheat_report(game_id: int, side: str, report_dict: dict, player_rating: Optional[int] = None):
+    conn = _get_db()
+    conn.execute(
+        """
+        INSERT INTO cheat_reports (game_id, side, player_rating, fairness_score, confidence, report_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(game_id, side) DO UPDATE SET
+            player_rating  = excluded.player_rating,
+            fairness_score = excluded.fairness_score,
+            confidence     = excluded.confidence,
+            report_json    = excluded.report_json,
+            created_at     = excluded.created_at
+        """,
+        (
+            game_id,
+            side,
+            player_rating,
+            report_dict.get("fairness_score", 0.0),
+            report_dict.get("confidence", "low"),
+            json.dumps(report_dict),
+            time.time(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_cheat_report(game_id: int, side: str) -> Optional[Dict]:
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT report_json, created_at FROM cheat_reports WHERE game_id=? AND side=?",
+        (game_id, side),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    data = json.loads(row["report_json"])
+    data["_cached_at"] = row["created_at"]
+    return data
+
+
+def list_cheat_reports_for_games(game_ids: List[int], side: str) -> List[Dict]:
+    if not game_ids:
+        return []
+    conn = _get_db()
+    placeholders = ",".join("?" * len(game_ids))
+    rows = conn.execute(
+        f"SELECT game_id, report_json, created_at FROM cheat_reports WHERE game_id IN ({placeholders}) AND side=?",
+        (*game_ids, side),
+    ).fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        data = json.loads(row["report_json"])
+        data["game_id"] = row["game_id"]
+        data["_cached_at"] = row["created_at"]
+        result.append(data)
+    return result

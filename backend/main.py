@@ -22,8 +22,10 @@ import time as time_mod
 # Internal imports
 from engines.stockfish import StockfishAnalyzer
 from engines.gemini_ocr import extract_pgn_from_image, extract_timestamps_from_image
-from database import init_db, save_game, list_games, get_game as db_get_game, delete_game, update_game_meta, get_opening_tree, get_games_for_move, update_move_comment, update_move_key_moment, get_move_annotations, add_variation, get_variations, delete_variation, DB_PATH
+from database import init_db, save_game, list_games, get_game as db_get_game, delete_game, update_game_meta, get_opening_tree, get_games_for_move, update_move_comment, update_move_key_moment, get_move_annotations, add_variation, get_variations, delete_variation, DB_PATH, upsert_cheat_report, get_cheat_report as db_get_cheat_report
 from utils.cheat_detector import compute_cheat_report, CheatReport
+from utils.aggregate_report import compute_aggregate_report
+from utils.fairplay_lookup import fetch_chesscom_status, fetch_lichess_status
 
 app = FastAPI(title="Chess scoresheet Digitizer")
 
@@ -407,24 +409,26 @@ class CheatReportRequest(BaseModel):
 class CheatReportResponse(BaseModel):
     fairness_score: float
     fairness_label: str
+    confidence: str
     luck_score: float
     accuracy_variance: float
     time_correlation: float
     perfect_streak_max: int
     phase_accuracy: dict
+    accuracy_history: list[float]
     premove_count: int
     flagged_move_count: int
     flagged_moves: list
     summary: str
+    disclaimer: str
+    reporting_channels: list
+    baseline: dict | None = None
+    rating_delta_score: float = 0.0
 
 
 @app.post("/api/analyze/cheat-report", response_model=CheatReportResponse)
-def get_cheat_report(req: CheatReportRequest):
-    """Compute a fair-play audit report for one side of a game.
-
-    side='opponent': analyze Black's half (even ply numbers)
-    side='self':     analyze White's half (odd ply numbers)
-    """
+def post_cheat_report(req: CheatReportRequest):
+    """Compute a fair-play audit report for one side of a game and persist it."""
     game = db_get_game(req.game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
@@ -438,17 +442,62 @@ def get_cheat_report(req: CheatReportRequest):
     if req.side == "opponent":
         target_moves = black_moves
         comparative_moves = white_moves
+        elo_field = "blackElo"
     else:
         target_moves = white_moves
         comparative_moves = black_moves
+        elo_field = "whiteElo"
+
+    meta = game.get("metadata", {})
+    try:
+        player_rating = int(meta.get(elo_field) or 0) or None
+    except (ValueError, TypeError):
+        player_rating = None
 
     report = compute_cheat_report(
         analysis=target_moves,
         side=req.side,
         player_moves=comparative_moves,
+        player_rating=player_rating,
     )
+    rd = report.to_dict()
+    upsert_cheat_report(req.game_id, req.side, rd, player_rating)
+    return CheatReportResponse(**rd)
 
-    return CheatReportResponse(**report.to_dict())
+
+@app.get("/api/analyze/cheat-report/{game_id}")
+def get_persisted_cheat_report(game_id: int, side: str = "opponent"):
+    """Return a previously persisted cheat report."""
+    report = db_get_cheat_report(game_id, side)
+    if not report:
+        raise HTTPException(status_code=404, detail="No report found — run analysis first")
+    return report
+
+
+class AggregateReportRequest(BaseModel):
+    game_ids: list[int]
+    side: str = "opponent"
+
+
+@app.post("/api/analyze/cheat-report/aggregate")
+def post_aggregate_cheat_report(req: AggregateReportRequest):
+    """Aggregate fair-play report across multiple games without re-running Stockfish."""
+    if not req.game_ids:
+        raise HTTPException(status_code=422, detail="game_ids must be non-empty")
+    result = compute_aggregate_report(req.game_ids, req.side)
+    return result.to_dict()
+
+
+@app.get("/api/fairplay-status")
+def get_fairplay_status(platform: str, username: str):
+    """Proxy fair-play account status from Chess.com or Lichess."""
+    platform = platform.lower()
+    if platform in ("chesscom", "chess.com"):
+        return fetch_chesscom_status(username)
+    elif platform == "lichess":
+        return fetch_lichess_status(username)
+    else:
+        raise HTTPException(status_code=422, detail="platform must be 'chesscom' or 'lichess'")
 
 
 # ── Config ───────────────────────────────────────────────────────────────────

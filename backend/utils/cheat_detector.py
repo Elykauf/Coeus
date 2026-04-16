@@ -2,24 +2,41 @@
 # Statistical fairness analysis for a player's half of a chess game.
 # Returns a CheatReport with signal scores and a human-readable summary.
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Any, Optional
 import math
+
+DISCLAIMER = (
+    "This report is a statistical indicator only. It is not proof of cheating and must not "
+    "be used to publicly accuse any player. If you believe misconduct occurred, please report "
+    "through official channels."
+)
+
+REPORTING_CHANNELS = [
+    {"name": "Chess.com Fair Play", "url": "https://www.chess.com/report"},
+    {"name": "Lichess moderation", "url": "https://lichess.org/report"},
+]
 
 
 @dataclass
 class CheatReport:
     fairness_score: float       # 0–1 (1 = most suspicious)
     fairness_label: str         # FAIR / SUSPICIOUS / LIKELY_MANIPULATED
+    confidence: str             # low / medium / high
     luck_score: float          # positive = lucky, negative = unlucky
     accuracy_variance: float   # std-dev of per-move accuracy
     time_correlation: float   # Pearson r between time_spent and CPL (-1 to 1)
     perfect_streak_max: int    # longest consecutive CPL=0 run
     phase_accuracy: dict       # {phase: avg_accuracy}
+    accuracy_history: list[float]  # per-move accuracy (0–100) in move order
     premove_count: int         # moves < 1s in positions with 3+ legal moves & eval > 1 pawn
     flagged_move_count: int    # total flagged moves
     flagged_moves: list         # [{ply, san, reason, time_spent, cpl}]
     summary: str                # paragraph summary
+    disclaimer: str = field(default=DISCLAIMER)
+    reporting_channels: list = field(default_factory=lambda: list(REPORTING_CHANNELS))
+    baseline: Optional[dict] = None
+    rating_delta_score: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -147,6 +164,7 @@ def compute_cheat_report(
     analysis: list[dict],
     side: str = "opponent",
     player_moves: Optional[list[dict]] = None,
+    player_rating: Optional[int] = None,
 ) -> CheatReport:
     """
     Compute a fairness report for one side of a game.
@@ -159,9 +177,10 @@ def compute_cheat_report(
     """
     if not analysis:
         return CheatReport(
-            fairness_score=0.0, fairness_label="NO_DATA",
+            fairness_score=0.0, fairness_label="NO_DATA", confidence="low",
             luck_score=0.0, accuracy_variance=0.0, time_correlation=0.0,
             perfect_streak_max=0, phase_accuracy={},
+            accuracy_history=[],
             premove_count=0, flagged_move_count=0, flagged_moves=[],
             summary="No move data available.",
         )
@@ -189,6 +208,9 @@ def compute_cheat_report(
     time_corr = _time_correlation(moves_to_analyze)
     flagged, premove_count = _build_flagged_moves(moves_to_analyze, moves_to_analyze)
 
+    # Per-move accuracy history
+    accuracy_history = [round(get_accuracy(_cpl(m)), 1) for m in moves_to_analyze]
+
     # Accuracy variance (std-dev)
     accs = [get_accuracy(_cpl(m)) for m in moves_to_analyze]
     if len(accs) >= 2:
@@ -207,21 +229,43 @@ def compute_cheat_report(
         if total > 0:
             luck_score = round((opp_blunders - player_blunders) / max(total, 1), 2)
 
+    # Rating baseline comparison (optional)
+    baseline = None
+    rating_delta_score = 0.0
+    if player_rating is not None and accs:
+        from utils.rating_baselines import baseline_delta
+        avg_cpl = sum(_cpl(m) for m in moves_to_analyze) / len(moves_to_analyze)
+        avg_acc_val = sum(accs) / len(accs)
+        baseline = baseline_delta(avg_cpl, avg_acc_val, player_rating)
+        if baseline["over_performance"]:
+            rating_delta_score = round(min(max(baseline["cpl_zscore"] / 4.0, 0.0), 1.0), 3)
+
     # Composite fairness score (0–1)
     # Higher = more suspicious
-    streak_score = min(perfect_streak / 10, 1.0) * 0.30
-    variance_score = min(acc_variance / 20, 1.0) * 0.20  # LOW variance = suspicious
-    time_score = (1 - min(abs(time_corr) / 0.8, 1.0)) * 0.25 if time_corr < 0 else 0.0
-    premove_score = min(premove_count / 5, 1.0) * 0.25
+    if player_rating is not None:
+        streak_score   = min(perfect_streak / 10, 1.0) * 0.25
+        variance_score = min(acc_variance / 20, 1.0) * 0.17
+        time_score     = (1 - min(abs(time_corr) / 0.8, 1.0)) * 0.21 if time_corr < 0 else 0.0
+        premove_score  = min(premove_count / 5, 1.0) * 0.22
+        rating_score   = rating_delta_score * 0.15
+    else:
+        streak_score   = min(perfect_streak / 10, 1.0) * 0.30
+        variance_score = min(acc_variance / 20, 1.0) * 0.20
+        time_score     = (1 - min(abs(time_corr) / 0.8, 1.0)) * 0.25 if time_corr < 0 else 0.0
+        premove_score  = min(premove_count / 5, 1.0) * 0.25
+        rating_score   = 0.0
 
-    fairness_score = round(min(streak_score + variance_score + time_score + premove_score, 1.0), 3)
+    fairness_score = round(min(streak_score + variance_score + time_score + premove_score + rating_score, 1.0), 3)
 
     if fairness_score >= 0.6:
         label = "LIKELY_MANIPULATED"
+        confidence = "high"
     elif fairness_score >= 0.3:
         label = "SUSPICIOUS"
+        confidence = "medium"
     else:
         label = "FAIR"
+        confidence = "low"
 
     # Human-readable summary
     avg_acc = round(sum(accs) / len(accs), 1) if accs else 0
@@ -240,13 +284,17 @@ def compute_cheat_report(
     return CheatReport(
         fairness_score=fairness_score,
         fairness_label=label,
+        confidence=confidence,
         luck_score=luck_score,
         accuracy_variance=acc_variance,
         time_correlation=time_corr,
         perfect_streak_max=perfect_streak,
         phase_accuracy=phase_acc,
+        accuracy_history=accuracy_history,
         premove_count=premove_count,
         flagged_move_count=len(flagged),
         flagged_moves=flagged,
         summary=summary,
+        baseline=baseline,
+        rating_delta_score=rating_delta_score,
     )

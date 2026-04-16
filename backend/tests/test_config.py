@@ -1,4 +1,5 @@
 """Tests for /api/config endpoints."""
+
 import json
 import pytest
 from tests.conftest import requires_stockfish
@@ -14,9 +15,13 @@ def test_get_config_returns_expected_keys(client):
     assert "stockfish_threads" in data
 
 
+@requires_stockfish
 def test_post_config_saves_values(client, saved_config):
+    from tests.conftest import _stockfish_path
+
+    real_sf = _stockfish_path()
     payload = {
-        "stockfish_path": "/usr/bin/stockfish",
+        "stockfish_path": real_sf,
         "gemini_api_key": "",
         "player_name": "TestPlayer",
         "stockfish_threads": 2,
@@ -32,9 +37,13 @@ def test_post_config_saves_values(client, saved_config):
     assert data["stockfish_threads"] == 2
 
 
+@requires_stockfish
 def test_post_config_persists_to_file(client, saved_config):
+    from tests.conftest import _stockfish_path
+
+    real_sf = _stockfish_path()
     payload = {
-        "stockfish_path": "/tmp/fake-sf",
+        "stockfish_path": real_sf,
         "gemini_api_key": "test-key",
         "player_name": "FileTest",
         "stockfish_threads": 1,
@@ -48,6 +57,7 @@ def test_post_config_persists_to_file(client, saved_config):
 @requires_stockfish
 def test_stockfish_test_endpoint_succeeds(client):
     from tests.conftest import _stockfish_path
+
     payload = {
         "stockfish_path": _stockfish_path(),
         "gemini_api_key": "",
