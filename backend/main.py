@@ -1987,7 +1987,9 @@ def _run_queue_job(job: dict, cancel: threading.Event):
     if _queue_sf is None:
         _queue_sf = _build_stockfish(config)
 
-    tl = {"Fast": 0.5, "Standard": 2.0, "Deep": 10.0}.get(job["depth"], 2.0)
+    tl = {"Quick": 0.15, "Fast": 0.5, "Standard": 2.0, "Deep": 10.0}.get(
+        job["depth"], 2.0
+    )
 
     pgn_io = io.StringIO(job["pgn"])
     game = chess.pgn.read_game(pgn_io)

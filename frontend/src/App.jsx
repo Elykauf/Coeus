@@ -317,6 +317,43 @@ function StatusBadge({ status }) {
   return <span style={{ fontSize: 11, fontWeight: 600, color }}>{label}</span>
 }
 
+// ── Connection Indicator ──────────────────────────────────────────────────────
+
+function ConnectionIndicator() {
+  const [online, setOnline] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const check = async () => {
+      try {
+        await axios.get('/api/config', { timeout: 3000 })
+        if (!cancelled) setOnline(true)
+      } catch {
+        if (!cancelled) setOnline(false)
+      }
+    }
+    check()
+    const id = setInterval(check, 15000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  if (online === null) return null
+  return (
+    <div
+      title={online ? 'Backend connected' : 'Backend disconnected'}
+      style={{
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        background: online ? '#4caf8c' : '#EF4444',
+        flexShrink: 0,
+        boxShadow: `0 0 6px ${online ? '#4caf8c88' : '#EF444488'}`,
+        transition: 'background 0.3s',
+      }}
+    />
+  )
+}
+
 // ── App ──────────────────────────────────────────────────────────────────────
 
 function MainAppContent() {
@@ -364,6 +401,7 @@ function MainAppContent() {
         </div>
         <NavTabs hasAnalysis={!!analysis} />
         <div className="header-right">
+          <ConnectionIndicator />
           <button className="btn-icon btn-import" title="Import game" onClick={() => navigate('/upload')}>
             <Plus size={16} />
           </button>

@@ -8,7 +8,7 @@ export default function PlayerFairPlayModal({ onClose, prefillJobId, prefillRepo
   const [phase, setPhase] = useState(prefillJobId ? 'live' : 'form')   // 'form' | 'live'
   const [platform, setPlatform] = useState('chesscom')
   const [username, setUsername] = useState('')
-  const [depth, setDepth] = useState('Standard')
+  const [depth, setDepth] = useState('Quick')
   const [jobId, setJobId] = useState(prefillJobId || null)
   const [job, setJob] = useState(prefillReport ? { status: 'done', cheat_aggregate: prefillReport, title: prefillTitle, games_analyzed: prefillReport?.game_count, progress: { percent: 100 } } : null)
   const [error, setError] = useState(null)
@@ -143,6 +143,7 @@ export default function PlayerFairPlayModal({ onClose, prefillJobId, prefillRepo
                 <div className="field-label" style={{ marginBottom: 6 }}>Depth</div>
                 <select className="appbar-input" style={{ width: '100%', padding: '7px 10px' }}
                   value={depth} onChange={e => setDepth(e.target.value)}>
+                  <option value="Quick">Quick (0.15s)</option>
                   <option value="Fast">Fast (0.5s)</option>
                   <option value="Standard">Standard (2s)</option>
                   <option value="Deep">Deep (10s)</option>
