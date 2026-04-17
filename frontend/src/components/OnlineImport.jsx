@@ -291,16 +291,12 @@ export default function OnlineImport() {
       const res = await axios.get(
         `/api/chesscom/games?username=${encodeURIComponent(username.trim())}&year=${year}&month=${month}&offset=0&limit=30`,
       );
-      // res.data;
+      res.data;
       const list = res.data.games || [];
       setGames(list);
-      setTotal(res.data.length ?? 0);
+      setTotal(res.data.total ?? 0);
       setSelected(new Set(list.map((_, i) => i)));
-      console.log(typeof res.data);
-      console.log(typeof res.data[0]);
-      var games = JSON.parse(res.data);
-      console.log(games);
-      if ((res.data.length ?? 0) === 0)
+      if ((res.data.total ?? 0) === 0)
         setError("No games found for this month");
     } catch (e) {
       setError(e.response?.data?.detail || "Failed to fetch games");

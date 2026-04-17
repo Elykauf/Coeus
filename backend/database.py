@@ -338,7 +338,7 @@ def save_game(game_json: dict, analysis_depth: str = None, hidden: bool = False)
             """INSERT INTO games
                    (uuid, title, event, site, date, white, black, result, eco, time_control,
                     data, analysis_depth, raw_pgn, opening, last_fen, created_at, updated_at, hidden)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (game_uuid,) + row_cols + (now, now, int(hidden)),
         )
         game_id = cursor.lastrowid
