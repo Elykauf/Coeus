@@ -360,17 +360,17 @@ def db_update_game_meta(game_id: int, data: dict):
     return {"status": "success"}
 
 
-@app.delete("/api/db/games/{game_id}")
-def db_delete_game(game_id: int):
-    delete_game(game_id)
-    return {"status": "success"}
-
-
 @app.delete("/api/db/games/imported")
 def db_delete_imported_games():
     """Delete all online-imported (batch analyzed) games and their cheat reports."""
     count = delete_imported_games()
     return {"status": "ok", "deleted": count}
+
+
+@app.delete("/api/db/games/{game_id}")
+def db_delete_game(game_id: int):
+    delete_game(game_id)
+    return {"status": "success"}
 
 
 @app.post("/api/db/games/{game_id}/reanalyze")
