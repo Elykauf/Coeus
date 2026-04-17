@@ -579,11 +579,12 @@ class _CheatBatchReq(BaseModel):
     username: str
     side: str = "opponent"
     depth: str = "Standard"
+    games: int = 25
 
 
 @app.post("/api/analyze/cheat-report/player")
 async def enqueue_player_cheat_analysis(req: _CheatBatchReq):
-    """Queue a full fair-play scan: fetch last 100 games and analyze each."""
+    """Queue a full fair-play scan: fetch last `games` games and analyze each."""
     import uuid as _uuid
 
     job_id = str(_uuid.uuid4())[:8]
@@ -1855,7 +1856,7 @@ def _run_cheat_batch_job(job: dict, cancel: threading.Event):
         save_job(job)
 
     raw_games = _fetch_games_sync(
-        platform, username, limit=100, on_progress=_on_fetch_progress
+        platform, username, limit=req.games, on_progress=_on_fetch_progress
     )
     if not raw_games:
         job["status"] = "error"

@@ -9,6 +9,7 @@ export default function PlayerFairPlayModal({ onClose, prefillJobId, prefillRepo
   const [platform, setPlatform] = useState('chesscom')
   const [username, setUsername] = useState('')
   const [depth, setDepth] = useState('Quick')
+  const [games, setGames] = useState(25)
   const [jobId, setJobId] = useState(prefillJobId || null)
   const [job, setJob] = useState(prefillReport ? { status: 'done', cheat_aggregate: prefillReport, title: prefillTitle, games_analyzed: prefillReport?.game_count, progress: { percent: 100 } } : null)
   const [error, setError] = useState(null)
@@ -49,7 +50,7 @@ export default function PlayerFairPlayModal({ onClose, prefillJobId, prefillRepo
     setError(null)
     try {
       const res = await axios.post('/api/analyze/cheat-report/player', {
-        platform, username: username.trim(), depth,
+        platform, username: username.trim(), depth, games,
       })
       setJobId(res.data.job_id)
       setPhase('live')
@@ -124,20 +125,15 @@ export default function PlayerFairPlayModal({ onClose, prefillJobId, prefillRepo
               />
             </div>
 
-            {/* Side + Depth row */}
+            {/* Games + Depth row */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div>
-                <div className="field-label" style={{ marginBottom: 6 }}>Side analyzed</div>
-                <div style={{
-                  padding: '7px 10px',
-                  background: 'var(--bg-elevated)',
-                  border: '1px solid var(--border-dim)',
-                  borderRadius: 6,
-                  fontSize: 13,
-                  color: 'var(--text-secondary)',
-                }}>
-                  Auto-detected per game
-                </div>
+                <div className="field-label" style={{ marginBottom: 6 }}>Games</div>
+                <select className="appbar-input" style={{ width: '100%', padding: '7px 10px' }}
+                  value={games} onChange={e => setGames(Number(e.target.value))}>
+                  <option value={25}>Standard (25)</option>
+                  <option value={100}>Exhaustive (100)</option>
+                </select>
               </div>
               <div>
                 <div className="field-label" style={{ marginBottom: 6 }}>Depth</div>
