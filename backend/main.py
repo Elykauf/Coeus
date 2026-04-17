@@ -1362,64 +1362,45 @@ async def chesscom_games(
 
     url = f"https://api.chess.com/pub/player/{username}/games/{year}/{month:02d}/pgn"
 
-    async def ndjson_generator():
-        """Stream-parse the PGN response. Yields each game as a JSON line.
-        Also caches the full list after parsing completes."""
-        import time as _t2
+    try:
+        resp = await _http_client.get(url, headers={"User-Agent": "ChessAnalyzer/1.0"})
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Chess.com API error: {exc}")
 
-        parsed_all = []
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Username not found on Chess.com")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Chess.com API error: {resp.status_code}")
 
+    parsed_all = []
+    pgn_stream = io.StringIO(resp.text)
+    while True:
         try:
-            resp = await _http_client.get(
-                url, headers={"User-Agent": "ChessAnalyzer/1.0"}
-            )
-        except httpx.HTTPError as exc:
-            yield json.dumps({"error": f"Chess.com API error: {exc}"}) + "\n"
-            return
+            game = chess.pgn.read_game(pgn_stream)
+        except Exception:
+            break
+        if game is None:
+            break
 
-        if resp.status_code == 404:
-            yield json.dumps({"error": "Username not found on Chess.com"}) + "\n"
-            return
-        if resp.status_code != 200:
-            yield (
-                json.dumps({"error": f"Chess.com API error: {resp.status_code}"}) + "\n"
-            )
-            return
+        h = game.headers
+        parsed_all.append({
+            "url": h.get("Link", ""),
+            "white": h.get("White", ""),
+            "black": h.get("Black", ""),
+            "date": h.get("Date", ""),
+            "result": h.get("Result", ""),
+            "eco": h.get("ECO", ""),
+            "event": h.get("Event", ""),
+            "time_control": h.get("TimeControl", ""),
+            "termination": h.get("Termination", ""),
+            "pgn": str(game),
+            "rated": True,
+            "white_accuracy": None,
+            "black_accuracy": None,
+        })
 
-        # Incrementally parse the PGN response body — no buffering the full list
-        pgn_stream = io.StringIO(resp.text)
-        while True:
-            try:
-                game = chess.pgn.read_game(pgn_stream)
-            except Exception:
-                break
-            if game is None:
-                break
-
-            h = game.headers
-            pgn_text = str(game)
-            game_entry = {
-                "url": h.get("Link", ""),
-                "white": h.get("White", ""),
-                "black": h.get("Black", ""),
-                "date": h.get("Date", ""),
-                "result": h.get("Result", ""),
-                "eco": h.get("ECO", ""),
-                "event": h.get("Event", ""),
-                "time_control": h.get("TimeControl", ""),
-                "termination": h.get("Termination", ""),
-                "pgn": pgn_text,
-                "rated": True,
-                "white_accuracy": None,
-                "black_accuracy": None,
-            }
-            parsed_all.append(game_entry)
-            yield json.dumps(game_entry) + "\n"
-
-        # Populate cache for subsequent requests
-        _cc_cache[cache_key] = {"data": parsed_all, "expires": _t2.time() + 120}
-
-    return StreamingResponse(ndjson_generator(), media_type="application/x-ndjson")
+    _cc_cache[cache_key] = {"data": parsed_all, "expires": _t.time() + 120}
+    return {"games": parsed_all[offset : offset + limit], "total": len(parsed_all)}
 
 
 class ChessComImportRequest(BaseModel):
