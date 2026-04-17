@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, List, Dict
 
 import os as _os
+
 DB_PATH = Path(_os.environ.get("CHESS_DB", "chess_games.db"))
 
 
@@ -79,7 +80,9 @@ def init_db():
         pass  # Column already exists
 
     try:
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_games_uuid ON games(uuid) WHERE uuid IS NOT NULL")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_uuid ON games(uuid) WHERE uuid IS NOT NULL"
+        )
         conn.commit()
     except Exception:
         pass
@@ -87,7 +90,9 @@ def init_db():
     # Backfill UUIDs for existing rows
     rows = conn.execute("SELECT id FROM games WHERE uuid IS NULL").fetchall()
     for row in rows:
-        conn.execute("UPDATE games SET uuid=? WHERE id=?", (str(uuid_lib.uuid4()), row[0]))
+        conn.execute(
+            "UPDATE games SET uuid=? WHERE id=?", (str(uuid_lib.uuid4()), row[0])
+        )
     if rows:
         conn.commit()
 
@@ -141,7 +146,9 @@ def init_db():
     # Backfill: populate new columns for any existing rows that have a data blob but empty new columns
     # This runs once on startup for any pre-existing games.
     try:
-        rows = conn.execute("SELECT id, data FROM games WHERE (raw_pgn = '' OR opening = '' OR last_fen = '') AND data != ''").fetchall()
+        rows = conn.execute(
+            "SELECT id, data FROM games WHERE (raw_pgn = '' OR opening = '' OR last_fen = '') AND data != ''"
+        ).fetchall()
         for row in rows:
             try:
                 d = json.loads(row["data"])
@@ -224,6 +231,7 @@ def init_db():
 def _insert_moves(conn, game_id: int, game_json: dict):
     from utils.zobrist import calculate_hash
     import chess
+
     start_fen = game_json.get(
         "startFen",
         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -231,27 +239,37 @@ def _insert_moves(conn, game_id: int, game_json: dict):
     b = chess.Board(start_fen)
     prev_zobrist = calculate_hash(b)
     prev_fen = normalize_fen(start_fen)
-    
+
     for move in game_json.get("moves", []):
-        ev  = move.get("evaluation") or {}
+        ev = move.get("evaluation") or {}
         ann = move.get("annotations") or {}
-        eval_cp     = ev.get("value")
-        cpl         = ann.get("cpl")
-        
+        eval_cp = ev.get("value")
+        cpl = ann.get("cpl")
+
         try:
             m = b.parse_san(move["san"])
             b.push(m)
             curr_zobrist = calculate_hash(b)
         except Exception:
             curr_zobrist = None
-            
+
         fen_after_n = normalize_fen(move["fenAfter"])
         conn.execute(
             """INSERT INTO game_moves
                    (game_id, ply, san, uci, fen_before, fen_after, zobrist_before, zobrist_after, eval_cp, cpl)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (game_id, move["ply"], move["san"], move.get("uci"),
-             prev_fen, fen_after_n, prev_zobrist, curr_zobrist, eval_cp, cpl),
+            (
+                game_id,
+                move["ply"],
+                move["san"],
+                move.get("uci"),
+                prev_fen,
+                fen_after_n,
+                prev_zobrist,
+                curr_zobrist,
+                eval_cp,
+                cpl,
+            ),
         )
         prev_fen = fen_after_n
         prev_zobrist = curr_zobrist
@@ -296,9 +314,13 @@ def save_game(game_json: dict, analysis_depth: str = None) -> int:
     title = game_json.get("title", "")
 
     # Match by UUID first, then fall back to title (case-insensitive, catches re-imports)
-    existing = conn.execute("SELECT id FROM games WHERE uuid=?", (game_uuid,)).fetchone()
+    existing = conn.execute(
+        "SELECT id FROM games WHERE uuid=?", (game_uuid,)
+    ).fetchone()
     if not existing and title:
-        existing = conn.execute("SELECT id FROM games WHERE title=? COLLATE NOCASE", (title,)).fetchone()
+        existing = conn.execute(
+            "SELECT id FROM games WHERE title=? COLLATE NOCASE", (title,)
+        ).fetchone()
 
     now = time.time()
 
@@ -335,18 +357,20 @@ def save_game(game_json: dict, analysis_depth: str = None) -> int:
 
 def list_games(
     date_from: str = None,
-    date_to:   str = None,
-    player:    str = None,
-    source:    str = None,  # "online" | "local"
-    analyzed:  bool = None,  # True = only games with analysis_depth set
-    limit:     int = 25,
+    date_to: str = None,
+    player: str = None,
+    source: str = None,  # "online" | "local"
+    analyzed: bool = None,  # True = only games with analysis_depth set
+    limit: int = 25,
 ) -> List[Dict]:
     conn = _get_db()
     conditions, params = [], []
     if date_from:
-        conditions.append("date >= ?"); params.append(date_from)
+        conditions.append("date >= ?")
+        params.append(date_from)
     if date_to:
-        conditions.append("date <= ?"); params.append(date_to)
+        conditions.append("date <= ?")
+        params.append(date_to)
     if player:
         conditions.append("(white LIKE ? OR black LIKE ?)")
         params.extend([f"%{player}%", f"%{player}%"])
@@ -374,7 +398,9 @@ def list_games(
 
 def get_game(game_id: int) -> Optional[Dict]:
     conn = _get_db()
-    row = conn.execute("SELECT uuid, raw_pgn, analysis_depth, data FROM games WHERE id = ?", (game_id,)).fetchone()
+    row = conn.execute(
+        "SELECT uuid, raw_pgn, analysis_depth, data FROM games WHERE id = ?", (game_id,)
+    ).fetchone()
     conn.close()
     if not row:
         return None
@@ -450,7 +476,8 @@ def delete_game(game_id: int):
 def get_opening_tree(fen: str, player_name: str = "") -> List[Dict]:
     norm = normalize_fen(fen)
     conn = _get_db()
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT
             gm.san, gm.uci, gm.fen_after,
             COUNT(*)                                                          AS games,
@@ -468,7 +495,19 @@ def get_opening_tree(fen: str, player_name: str = "") -> List[Dict]:
         WHERE gm.fen_before = ?
         GROUP BY gm.san
         ORDER BY games DESC
-    """, (player_name, player_name, player_name, player_name, player_name, player_name, player_name, player_name, norm)).fetchall()
+    """,
+        (
+            player_name,
+            player_name,
+            player_name,
+            player_name,
+            player_name,
+            player_name,
+            player_name,
+            player_name,
+            norm,
+        ),
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -476,39 +515,47 @@ def get_opening_tree(fen: str, player_name: str = "") -> List[Dict]:
 def get_games_for_move(fen: str, san: str) -> List[Dict]:
     norm = normalize_fen(fen)
     conn = _get_db()
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT DISTINCT g.id, g.title, g.date, g.white, g.black, g.result, gm.ply, g.eco, g.time_control
         FROM game_moves gm
         JOIN games g ON g.id = gm.game_id
         WHERE gm.fen_before = ? AND gm.san = ?
         ORDER BY g.date DESC
         LIMIT 50
-    """, (norm, san)).fetchall()
+    """,
+        (norm, san),
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
 # Annotation CRUD functions
 
+
 def update_move_comment(game_id: int, ply: int, comment: str):
     """Set or update a comment for a specific move."""
     conn = _get_db()
     conn.execute(
         "UPDATE game_moves SET comments=? WHERE game_id=? AND ply=?",
-        (comment, game_id, ply)
+        (comment, game_id, ply),
     )
     conn.commit()
     conn.close()
 
-def update_move_key_moment(game_id: int, ply: int, is_key_moment: bool, label: str = None):
+
+def update_move_key_moment(
+    game_id: int, ply: int, is_key_moment: bool, label: str = None
+):
     """Mark or unmark a move as a key moment."""
     conn = _get_db()
     conn.execute(
         "UPDATE game_moves SET key_moment=?, key_moment_label=? WHERE game_id=? AND ply=?",
-        (1 if is_key_moment else 0, label, game_id, ply)
+        (1 if is_key_moment else 0, label, game_id, ply),
     )
     conn.commit()
     conn.close()
+
 
 def get_move_annotations(game_id: int) -> List[Dict]:
     """Get all annotations for a game."""
@@ -516,29 +563,36 @@ def get_move_annotations(game_id: int) -> List[Dict]:
     rows = conn.execute(
         """SELECT ply, san, comments, key_moment, key_moment_label FROM game_moves 
            WHERE game_id=? ORDER BY ply""",
-        (game_id,)
+        (game_id,),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
-def add_variation(game_id: int, ply: int, moves: str, eval_cp: int = None, name: str = None):
+
+def add_variation(
+    game_id: int, ply: int, moves: str, eval_cp: int = None, name: str = None
+):
     """Add a variation line for a specific ply."""
     conn = _get_db()
     # Get next variation index for this ply
-    existing = conn.execute(
-        "SELECT MAX(variation_index) FROM move_variations WHERE game_id=? AND ply=?",
-        (game_id, ply)
-    ).fetchone()[0] or -1
+    existing = (
+        conn.execute(
+            "SELECT MAX(variation_index) FROM move_variations WHERE game_id=? AND ply=?",
+            (game_id, ply),
+        ).fetchone()[0]
+        or -1
+    )
     var_index = existing + 1
-    
+
     conn.execute(
         """INSERT INTO move_variations (game_id, ply, variation_index, moves, eval_cp, name)
            VALUES (?, ?, ?, ?, ?, ?)""",
-        (game_id, ply, var_index, moves, eval_cp, name)
+        (game_id, ply, var_index, moves, eval_cp, name),
     )
     conn.commit()
     conn.close()
     return var_index
+
 
 def get_variations(game_id: int) -> List[Dict]:
     """Get all variations for a game."""
@@ -548,10 +602,11 @@ def get_variations(game_id: int) -> List[Dict]:
            FROM move_variations mv
            JOIN game_moves gm ON mv.game_id = gm.game_id AND mv.ply = gm.ply
            WHERE mv.game_id=? ORDER BY mv.ply, mv.variation_index""",
-        (game_id,)
+        (game_id,),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
 
 def delete_variation(variation_id: int):
     """Delete a specific variation."""
@@ -561,7 +616,9 @@ def delete_variation(variation_id: int):
     conn.close()
 
 
-def upsert_cheat_report(game_id: int, side: str, report_dict: dict, player_rating: Optional[int] = None):
+def upsert_cheat_report(
+    game_id: int, side: str, report_dict: dict, player_rating: Optional[int] = None
+):
     conn = _get_db()
     conn.execute(
         """
@@ -619,3 +676,122 @@ def list_cheat_reports_for_games(game_ids: List[int], side: str) -> List[Dict]:
         data["_cached_at"] = row["created_at"]
         result.append(data)
     return result
+
+
+# ── Jobs table for persistent queue ────────────────────────────────────────────
+
+
+def init_jobs_db():
+    conn = _get_db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            job_id          TEXT PRIMARY KEY,
+            job_type        TEXT NOT NULL DEFAULT 'analysis',
+            title           TEXT NOT NULL DEFAULT '',
+            game_uuid       TEXT,
+            game_id         INTEGER,
+            pgn             TEXT NOT NULL DEFAULT '',
+            depth           TEXT NOT NULL DEFAULT 'Standard',
+            status          TEXT NOT NULL DEFAULT 'queued',
+            progress_json   TEXT NOT NULL DEFAULT '{}',
+            error           TEXT,
+            result_game_id  INTEGER,
+            created_at      REAL NOT NULL,
+            updated_at      REAL NOT NULL,
+            extra_json      TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_jobs_status   ON jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_jobs_game_uuid ON jobs(game_uuid);
+    """)
+    conn.commit()
+    conn.close()
+
+
+def _job_from_row(row: dict) -> dict:
+    """Convert a DB row dict into the job dict format used by the queue."""
+    import json as _json
+
+    job = {
+        "job_id": row["job_id"],
+        "job_type": row["job_type"],
+        "title": row["title"],
+        "game_uuid": row["game_uuid"],
+        "game_id": row["game_id"],
+        "pgn": row["pgn"],
+        "depth": row["depth"],
+        "status": row["status"],
+        "progress": _json.loads(row["progress_json"]) if row["progress_json"] else {},
+        "error": row["error"],
+        "result_game_id": row["result_game_id"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+    extra = _json.loads(row["extra_json"]) if row["extra_json"] else {}
+    job.update(extra)
+    return job
+
+
+def save_job(job: dict) -> None:
+    """Insert or replace a job. Call after any field change."""
+    import json as _json
+    import time as _time
+
+    conn = _get_db()
+
+    extra = {
+        k: v
+        for k, v in job.items()
+        if k
+        in (
+            "platform",
+            "username",
+            "side",
+            "games_fetched",
+            "games_total",
+            "games_analyzed",
+            "cheat_aggregate",
+        )
+    }
+
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO jobs
+        (job_id, job_type, title, game_uuid, game_id, pgn, depth, status,
+         progress_json, error, result_game_id, created_at, updated_at, extra_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+        (
+            job.get("job_id"),
+            job.get("job_type", "analysis"),
+            job.get("title", ""),
+            job.get("game_uuid"),
+            job.get("game_id"),
+            job.get("pgn", ""),
+            job.get("depth", "Standard"),
+            job.get("status", "queued"),
+            _json.dumps(job.get("progress", {})),
+            job.get("error"),
+            job.get("result_game_id"),
+            job.get("created_at", _time.time()),
+            _time.time(),
+            _json.dumps(extra),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def load_jobs() -> List[dict]:
+    """Load all jobs from DB, sorted by created_at ascending."""
+    conn = _get_db()
+    rows = conn.execute("SELECT * FROM jobs ORDER BY created_at ASC").fetchall()
+    conn.close()
+    return [_job_from_row(dict(r)) for r in rows]
+
+
+def delete_job(job_id: str) -> bool:
+    conn = _get_db()
+    cur = conn.execute("DELETE FROM jobs WHERE job_id=?", (job_id,))
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0

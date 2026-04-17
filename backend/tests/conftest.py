@@ -4,6 +4,7 @@ Shared fixtures for all backend tests.
 Tests must be run from the backend/ directory:
     cd backend && python -m pytest tests/ -v
 """
+
 import json
 import os
 import shutil
@@ -29,12 +30,14 @@ from main import app  # noqa: E402 — intentionally imported after patching
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture(autouse=True)
 def clean_db():
     """Wipe and recreate the test database before each test."""
     if TEST_DB.exists():
         TEST_DB.unlink()
     database.init_db()
+    database.init_jobs_db()
     yield
     if TEST_DB.exists():
         TEST_DB.unlink()
@@ -58,6 +61,7 @@ def saved_config():
 
 
 # ── Stockfish availability ────────────────────────────────────────────────────
+
 
 def _stockfish_path() -> str:
     config_path = _backend_dir / "config.json"
@@ -101,7 +105,10 @@ RUY_LOPEZ_PGN = """\
 1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 *
 """
 
-def make_game_json(title="Test Game", pgn=None, white="White", black="Black", result="1-0", uuid=None):
+
+def make_game_json(
+    title="Test Game", pgn=None, white="White", black="Black", result="1-0", uuid=None
+):
     """Minimal game JSON as stored in the database."""
     if pgn is None:
         pgn = SCHOLAR_MATE_PGN
@@ -116,8 +123,16 @@ def make_game_json(title="Test Game", pgn=None, white="White", black="Black", re
             "event": "Test",
         },
         "moves": [
-            {"ply": 1, "san": "e4", "fenAfter": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"},
-            {"ply": 2, "san": "e5", "fenAfter": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2"},
+            {
+                "ply": 1,
+                "san": "e4",
+                "fenAfter": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+            },
+            {
+                "ply": 2,
+                "san": "e5",
+                "fenAfter": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2",
+            },
         ],
         "analysis": [],
     }

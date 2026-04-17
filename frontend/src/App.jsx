@@ -9,6 +9,7 @@ import Review from './components/Review'
 import Games from './components/Games'
 import Analyze from './components/Analyze'
 import { ToastProvider, useToast } from './components/Toast'
+import { PlayerFairPlayModal } from './components/ui'
 import './App.css'
 
 // ── Navigation with sliding indicator ────────────────────────────────────────
@@ -124,6 +125,7 @@ function QueuePanel({ setAnalysis }) {
   const toast = useToast()
   const [jobs, setJobs] = useState([])
   const [expanded, setExpanded] = useState(false)
+  const [viewReportJob, setViewReportJob] = useState(null)
   const prevDoneIds = useRef(new Set())
   const initializedRef = useRef(false)
   const wsRef = useRef(null)
@@ -210,7 +212,18 @@ function QueuePanel({ setAnalysis }) {
   const analyzing = jobs.find(j => j.status === 'analyzing')
   const activeCount = jobs.filter(j => j.status === 'queued' || j.status === 'analyzing').length
 
-  if (jobs.length === 0) return null
+  if (jobs.length === 0 && !viewReportJob) return null
+
+  if (viewReportJob) {
+    return (
+      <PlayerFairPlayModal
+        prefillJobId={viewReportJob.job_id}
+        prefillReport={viewReportJob.cheat_aggregate}
+        prefillTitle={viewReportJob.title}
+        onClose={() => setViewReportJob(null)}
+      />
+    )
+  }
 
   return (
     <div
@@ -238,7 +251,11 @@ function QueuePanel({ setAnalysis }) {
                     <div style={{ width: `${job.progress?.percent ?? 0}%`, height: '100%', background: 'var(--accent)', transition: 'width 0.4s ease' }} />
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
-                    {job.progress?.current_move} · {job.progress?.ply ?? 0}/{job.progress?.total ?? 0}
+                    {job.job_type === 'cheat_batch'
+                      ? job.progress?.current_game?.startsWith('Fetching')
+                        ? `${job.progress.current_game} · ${job.games_analyzed ?? 0} fetched`
+                        : `Game ${job.progress?.current_game || '…'} · ${job.games_analyzed ?? 0} analyzed`
+                      : `${job.progress?.current_move} · ${job.progress?.ply ?? 0}/${job.progress?.total ?? 0}`}
                   </div>
                 </>
               )}
@@ -246,6 +263,12 @@ function QueuePanel({ setAnalysis }) {
               <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                 <StatusBadge status={job.status} />
                 <div style={{ flex: 1 }} />
+                {job.status === 'done' && job.job_type === 'cheat_batch' && job.cheat_aggregate && (
+                  <button className="btn btn-primary" style={{ padding: '1px 10px', fontSize: 11 }}
+                    onClick={() => { setViewReportJob(job); setExpanded(false) }}>
+                    View Report
+                  </button>
+                )}
                 {job.status === 'done' && job.result_game_id && (
                   <button className="btn btn-primary" style={{ padding: '1px 10px', fontSize: 11 }} onClick={() => reviewCompleted(job)}>Review</button>
                 )}
@@ -272,7 +295,9 @@ function QueuePanel({ setAnalysis }) {
         style={{ borderRadius: 20, maxWidth: "140px", padding: '7px 18px', fontSize: 13, fontWeight: 600, boxShadow: '0 4px 20px rgba(0,0,0,0.4)', minWidth: 140 }}
       >
         {analyzing
-          ? `Analyzing… ${analyzing.progress?.percent ?? 0}%`
+          ? analyzing.job_type === 'cheat_batch' && analyzing.progress?.current_game?.startsWith('Fetching')
+            ? `${analyzing.progress.current_game}`
+            : `Analyzing… ${analyzing.progress?.percent ?? 0}%`
           : `Queue · ${activeCount} pending`}
       </button>
     </div>

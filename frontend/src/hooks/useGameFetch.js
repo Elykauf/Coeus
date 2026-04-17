@@ -44,14 +44,13 @@ export function useGameFetch(filters) {
   }, [dateFrom, dateTo, player, source, analyzedOnly])
 
   // Initial fetch on mount
-  useEffect(() => { fetchGames() }, [])
 
   // Auto-search when filters change (debounced)
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => { fetchGames() }, 500)
     return () => { if (timerRef.current) clearTimeout(timerRef.current) }
-  }, [dateFrom, dateTo, player, source, analyzedOnly, fetchGames])
+  }, [dateFrom, dateTo, player, source, analyzedOnly])
 
   // Optimistically update result, then sync to server
   const updateResult = useCallback(async (id, result) => {

@@ -9,7 +9,15 @@ import traceback
 import concurrent.futures
 import threading
 from typing import List, Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    Form,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from starlette.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,7 +30,29 @@ import time as time_mod
 # Internal imports
 from engines.stockfish import StockfishAnalyzer
 from engines.gemini_ocr import extract_pgn_from_image, extract_timestamps_from_image
-from database import init_db, save_game, list_games, get_game as db_get_game, delete_game, update_game_meta, get_opening_tree, get_games_for_move, update_move_comment, update_move_key_moment, get_move_annotations, add_variation, get_variations, delete_variation, DB_PATH, upsert_cheat_report, get_cheat_report as db_get_cheat_report
+from database import (
+    init_db,
+    save_game,
+    list_games,
+    get_game as db_get_game,
+    delete_game,
+    update_game_meta,
+    get_opening_tree,
+    get_games_for_move,
+    update_move_comment,
+    update_move_key_moment,
+    get_move_annotations,
+    add_variation,
+    get_variations,
+    delete_variation,
+    DB_PATH,
+    upsert_cheat_report,
+    get_cheat_report as db_get_cheat_report,
+    init_jobs_db,
+    save_job,
+    load_jobs,
+    delete_job,
+)
 from utils.cheat_detector import compute_cheat_report, CheatReport
 from utils.aggregate_report import compute_aggregate_report
 from utils.fairplay_lookup import fetch_chesscom_status, fetch_lichess_status
@@ -31,6 +61,7 @@ app = FastAPI(title="Chess scoresheet Digitizer")
 
 # Init DB on startup
 init_db()
+init_jobs_db()
 
 # CORS setup
 app.add_middleware(
@@ -54,7 +85,11 @@ _http_client: Optional[httpx.AsyncClient] = None
 @app.on_event("startup")
 async def startup():
     global _http_client
-    _http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True, limits=httpx.Limits(max_keepalive_connections=10, max_connections=20))
+    _http_client = httpx.AsyncClient(
+        timeout=30.0,
+        follow_redirects=True,
+        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+    )
 
 
 @app.on_event("shutdown")
@@ -62,29 +97,34 @@ async def shutdown():
     if _http_client:
         await _http_client.aclose()
 
+
 class ConfigBase(BaseModel):
     stockfish_path: str
     gemini_api_key: str = ""
     player_name: str = ""
     stockfish_threads: int = 1
     stockfish_hash: int = 4096
-    stockfish_mode: str = "local"   # "local" | "remote"
-    stockfish_url: str = ""         # remote server URL when mode == "remote"
-    stockfish_api_key: str = ""     # optional API key for remote server
+    stockfish_mode: str = "local"  # "local" | "remote"
+    stockfish_url: str = ""  # remote server URL when mode == "remote"
+    stockfish_api_key: str = ""  # optional API key for remote server
+
 
 class ValidateRequest(BaseModel):
     moves: List[str]
+
 
 class MoveCommentRequest(BaseModel):
     game_id: int
     ply: int
     comment: str
 
+
 class KeyMomentRequest(BaseModel):
     game_id: int
     ply: int
     is_key_moment: bool
     label: Optional[str] = None
+
 
 class VariationRequest(BaseModel):
     game_id: int
@@ -93,8 +133,10 @@ class VariationRequest(BaseModel):
     eval_cp: Optional[int] = None
     name: Optional[str] = None
 
+
 class VariationDeleteRequest(BaseModel):
     variation_id: int
+
 
 def get_config():
     config_path = Path("config.json")
@@ -144,11 +186,13 @@ def _build_stockfish(config: dict = None) -> Optional[StockfishAnalyzer]:
 def _pgn_to_game_json(pgn_text: str, analysis: list, title: str = "") -> dict:
     """Convert PGN + analysis array into the canonical game JSON format."""
     import re, sys
+
     pgn_io = io.StringIO(pgn_text)
     try:
         game = chess.pgn.read_game(pgn_io)
     except ValueError as e:
         import logging
+
         logging.warning(f"PGN parsing failed: {e}")
         return None
     if not game:
@@ -171,12 +215,14 @@ def _pgn_to_game_json(pgn_text: str, analysis: list, title: str = "") -> dict:
 
         comment = node.comment or ""
         clock_remaining = None
-        clk_m = re.search(r'\[%clk\s+([^\]]+)\]', comment)
+        clk_m = re.search(r"\[%clk\s+([^\]]+)\]", comment)
         if clk_m:
             try:
-                parts = clk_m.group(1).split(',')[0].strip().split(':')
+                parts = clk_m.group(1).split(",")[0].strip().split(":")
                 if len(parts) == 3:
-                    clock_remaining = int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+                    clock_remaining = (
+                        int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+                    )
                 elif len(parts) == 2:
                     clock_remaining = int(parts[0]) * 60 + float(parts[1])
                 else:
@@ -186,47 +232,54 @@ def _pgn_to_game_json(pgn_text: str, analysis: list, title: str = "") -> dict:
 
         a = analysis[i] if i < len(analysis) else {}
         # eval_cp is the actual position score (white-relative cp); fall back to old "evaluation" field
-        eval_val = a.get("eval_cp") if a.get("eval_cp") is not None else (a.get("evaluation") or 0)
+        eval_val = (
+            a.get("eval_cp")
+            if a.get("eval_cp") is not None
+            else (a.get("evaluation") or 0)
+        )
         cpl = a.get("cpl") or 0
         best_move = a.get("best_move_san", "")
         pv = a.get("pv_san", [])
 
-        moves_data.append({
-            "ply": ply,
-            "moveNumber": (ply + 1) // 2,
-            "color": "w" if ply % 2 != 0 else "b",
-            "san": san,
-            "uci": uci,
-            "fenAfter": fen_after,
-            "time": {
-                "clockRemainingSeconds": clock_remaining,
-                "moveDurationSeconds": a.get("time_spent", 0.0),
-            },
-            "evaluation": {
-                "engine": "Stockfish",
-                "type": "cp",
-                "value": eval_val,
-            },
-            "annotations": {
-                "nag": None,
-                "cpl": cpl,
-                "isBlunder": cpl >= 200,
-                "phase": a.get("phase", ""),
-            },
-            "engine": {
-                "bestMove": best_move,
-                "pv": pv,
-            },
-        })
+        moves_data.append(
+            {
+                "ply": ply,
+                "moveNumber": (ply + 1) // 2,
+                "color": "w" if ply % 2 != 0 else "b",
+                "san": san,
+                "uci": uci,
+                "fenAfter": fen_after,
+                "time": {
+                    "clockRemainingSeconds": clock_remaining,
+                    "moveDurationSeconds": a.get("time_spent", 0.0),
+                },
+                "evaluation": {
+                    "engine": "Stockfish",
+                    "type": "cp",
+                    "value": eval_val,
+                },
+                "annotations": {
+                    "nag": None,
+                    "cpl": cpl,
+                    "isBlunder": cpl >= 200,
+                    "phase": a.get("phase", ""),
+                },
+                "engine": {
+                    "bestMove": best_move,
+                    "pv": pv,
+                },
+            }
+        )
 
-    date_str = re.sub(r'-?\?', '', headers.get("Date", "").replace(".", "-")).strip("-")
+    date_str = re.sub(r"-?\?", "", headers.get("Date", "").replace(".", "-")).strip("-")
 
     # Determine ECO manually if missing or explicitly provided as "?"
     eco_code = headers.get("ECO", "").split(" ")[0]
     opening_name = headers.get("Opening", "")
-    
+
     if not eco_code or eco_code == "?":
         from utils.opening import classify_opening
+
         try:
             classification = classify_opening(game)
             if classification:
@@ -234,6 +287,7 @@ def _pgn_to_game_json(pgn_text: str, analysis: list, title: str = "") -> dict:
                 opening_name = classification["name"]
         except Exception as e:
             import logging
+
             logging.error(f"Failed to cleanly classify ECO: {e}")
 
     game_json = {
@@ -254,23 +308,33 @@ def _pgn_to_game_json(pgn_text: str, analysis: list, title: str = "") -> dict:
             "eco": eco_code,
             "opening": opening_name,
         },
-        "startFen": headers.get("FEN", "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        "startFen": headers.get(
+            "FEN", "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        ),
         "moves": moves_data,
         "result": headers.get("Result", "*"),
     }
     return game_json
 
+
 # ── Game Database endpoints ──────────────────────────────────────────────────
+
 
 @app.get("/api/db/games")
 def db_list_games(
     date_from: str = None,
-    date_to:   str = None,
-    player:    str = None,
-    source:    str = None,  # "online" | "local"
-    analyzed:  bool = None,
+    date_to: str = None,
+    player: str = None,
+    source: str = None,  # "online" | "local"
+    analyzed: bool = None,
 ):
-    return list_games(date_from=date_from, date_to=date_to, player=player, source=source, analyzed=analyzed)
+    return list_games(
+        date_from=date_from,
+        date_to=date_to,
+        player=player,
+        source=source,
+        analyzed=analyzed,
+    )
 
 
 @app.get("/api/db/games/{game_id}")
@@ -315,11 +379,7 @@ def db_reanalyze_game(game_id: int):
         raise HTTPException(status_code=400, detail="No PGN available for this game")
 
     depth = game.get("analysis_depth", "Standard")
-    depth_map = {
-        'Fast': 2.0,
-        'Standard': 10.0,
-        'Deep': 30.0
-    }
+    depth_map = {"Fast": 2.0, "Standard": 10.0, "Deep": 30.0}
     time_limit = depth_map.get(depth, 10.0)
 
     config = get_config()
@@ -329,6 +389,7 @@ def db_reanalyze_game(game_id: int):
 
     # Clear existing move analysis
     from database import _get_db
+
     conn = _get_db()
     conn.execute("DELETE FROM game_moves WHERE game_id=?", (game_id,))
     conn.commit()
@@ -354,7 +415,9 @@ def db_reanalyze_game(game_id: int):
 
 
 @app.get("/api/db/opening-tree")
-def db_opening_tree(fen: str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"):
+def db_opening_tree(
+    fen: str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+):
     config = get_config()
     player_name = config.get("player_name", "")
     return {"fen": fen, "moves": get_opening_tree(fen, player_name)}
@@ -367,6 +430,7 @@ def db_opening_tree_games(fen: str, san: str):
 
 # ── Annotations (Comments, Key Moments, Variations) ───────────────────────────
 
+
 @app.get("/api/db/annotations/{game_id}")
 def db_get_annotations(game_id: int):
     """Get all annotations (comments, key moments) for a game."""
@@ -375,11 +439,13 @@ def db_get_annotations(game_id: int):
         "variations": get_variations(game_id),
     }
 
+
 @app.post("/api/db/move-comment")
 def db_update_move_comment(req: MoveCommentRequest):
     """Set or update a comment for a specific move."""
     update_move_comment(req.game_id, req.ply, req.comment)
     return {"status": "success"}
+
 
 @app.post("/api/db/key-moment")
 def db_update_key_moment(req: KeyMomentRequest):
@@ -387,11 +453,13 @@ def db_update_key_moment(req: KeyMomentRequest):
     update_move_key_moment(req.game_id, req.ply, req.is_key_moment, req.label)
     return {"status": "success"}
 
+
 @app.post("/api/db/variation")
 def db_add_variation(req: VariationRequest):
     """Add a variation line for a specific ply."""
     var_index = add_variation(req.game_id, req.ply, req.moves, req.eval_cp, req.name)
     return {"status": "success", "variation_index": var_index}
+
 
 @app.delete("/api/db/variation/{variation_id}")
 def db_delete_variation(variation_id: int):
@@ -402,9 +470,11 @@ def db_delete_variation(variation_id: int):
 
 # ── Fair Play Audit ────────────────────────────────────────────────────────────
 
+
 class CheatReportRequest(BaseModel):
     game_id: int
     side: str = "opponent"  # "opponent" or "self"
+
 
 class CheatReportResponse(BaseModel):
     fairness_score: float
@@ -422,7 +492,7 @@ class CheatReportResponse(BaseModel):
     summary: str
     disclaimer: str
     reporting_channels: list
-    baseline: dict | None = None
+    baseline: Optional[dict] = None
     rating_delta_score: float = 0.0
 
 
@@ -470,7 +540,9 @@ def get_persisted_cheat_report(game_id: int, side: str = "opponent"):
     """Return a previously persisted cheat report."""
     report = db_get_cheat_report(game_id, side)
     if not report:
-        raise HTTPException(status_code=404, detail="No report found — run analysis first")
+        raise HTTPException(
+            status_code=404, detail="No report found — run analysis first"
+        )
     return report
 
 
@@ -497,14 +569,56 @@ def get_fairplay_status(platform: str, username: str):
     elif platform == "lichess":
         return fetch_lichess_status(username)
     else:
-        raise HTTPException(status_code=422, detail="platform must be 'chesscom' or 'lichess'")
+        raise HTTPException(
+            status_code=422, detail="platform must be 'chesscom' or 'lichess'"
+        )
+
+
+class _CheatBatchReq(BaseModel):
+    platform: str  # "chesscom" or "lichess"
+    username: str
+    side: str = "opponent"
+    depth: str = "Standard"
+
+
+@app.post("/api/analyze/cheat-report/player")
+async def enqueue_player_cheat_analysis(req: _CheatBatchReq):
+    """Queue a full fair-play scan: fetch last 100 games and analyze each."""
+    import uuid as _uuid
+
+    job_id = str(_uuid.uuid4())[:8]
+    job = {
+        "job_id": job_id,
+        "job_type": "cheat_batch",
+        "platform": req.platform,
+        "username": req.username,
+        "side": req.side,
+        "depth": req.depth,
+        "game_uuid": f"cheat_batch_{job_id}",
+        "title": f"Fair-play: {req.username} ({req.platform})",
+        "pgn": "",
+        "status": "queued",
+        "progress": {"percent": 0, "current_game": "Waiting…", "game_title": ""},
+        "games_fetched": 0,
+        "games_total": 0,
+        "games_analyzed": 0,
+        "cheat_aggregate": None,
+        "error": None,
+        "result_game_id": None,
+    }
+    _queue_jobs.append(job)
+    save_job(job)
+    await _broadcast_queue()
+    return {"job_id": job_id}
 
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
+
 @app.get("/api/config")
 def get_app_config():
     return get_config()
+
 
 @app.post("/api/config")
 def update_config(config: ConfigBase):
@@ -519,6 +633,7 @@ def update_config(config: ConfigBase):
         stockfish = None
     stockfish = _build_stockfish(config.dict())
     return {"status": "success"}
+
 
 @app.post("/api/config/test-stockfish")
 def test_stockfish(config: ConfigBase):
@@ -537,21 +652,26 @@ def test_stockfish(config: ConfigBase):
         temp_analyzer.close()
 
         if eval_dict.get("score") is not None:
-             score_val = eval_dict["score"].relative.score()
-             return {
-                 "status": "success",
-                 "message": f"Stockfish operational. Eval for test FEN: {score_val/100:.1f}",
-                 "eval": score_val
-             }
+            score_val = eval_dict["score"].relative.score()
+            return {
+                "status": "success",
+                "message": f"Stockfish operational. Eval for test FEN: {score_val / 100:.1f}",
+                "eval": score_val,
+            }
         else:
-             return {"status": "error", "message": "Stockfish running but returned no score."}
+            return {
+                "status": "error",
+                "message": "Stockfish running but returned no score.",
+            }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 @app.post("/api/config/test-gemini")
 def test_gemini(config: ConfigBase):
     try:
         from google import genai
+
         if not config.gemini_api_key:
             return {"status": "error", "message": "No API key provided."}
         client = genai.Client(api_key=config.gemini_api_key)
@@ -564,6 +684,7 @@ def test_gemini(config: ConfigBase):
         return {"status": "success", "message": "Gemini responded successfully."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 @app.post("/api/ocr-crop")
 def ocr_crop(
@@ -578,18 +699,18 @@ def ocr_crop(
     file_path = Path("uploads") / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail=f"File {filename} not found")
-        
+
     try:
         img = Image.open(file_path)
         img = img.convert("RGB")
         img_w, img_h = img.size
-        
+
         # Frontend sends percentages (0-100)
         left = int((x / 100.0) * img_w)
         top = int((y / 100.0) * img_h)
         right = int(((x + width) / 100.0) * img_w)
         bottom = int(((y + height) / 100.0) * img_h)
-        
+
         # Boundary Clamping
         left = max(0, min(img_w - 2, left))
         top = max(0, min(img_h - 2, top))
@@ -603,16 +724,13 @@ def ocr_crop(
         crop_filename = f"crop_{filename}"
         crop_path = cropped_dir / crop_filename
         cropped_img.save(crop_path)
-        
-        if skip_ocr.lower() in ['true', '1', 'yes']:
-            return {
-                "pgn": None,
-                "crop_url": f"/cropped/{crop_filename}"
-            }
-        
+
+        if skip_ocr.lower() in ["true", "1", "yes"]:
+            return {"pgn": None, "crop_url": f"/cropped/{crop_filename}"}
+
         # Use the Gemini OCR engine
         pgn_fragment = extract_pgn_from_image(str(crop_path))
-        
+
         # Parse the JSON response
         try:
             pgn_json = json.loads(pgn_fragment)
@@ -620,34 +738,30 @@ def ocr_crop(
             # Fallback if it's not valid JSON (though prompt requested valid JSON)
             pgn_json = {"raw": pgn_fragment}
 
-        return {
-            "pgn": pgn_json,
-            "crop_url": f"/cropped/{crop_filename}"
-        }
+        return {"pgn": pgn_json, "crop_url": f"/cropped/{crop_filename}"}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/extract-timestamps")
-def extract_timestamps(
-    filename: str = Form(...),
-    pgn_context: str = Form(...)
-):
+def extract_timestamps(filename: str = Form(...), pgn_context: str = Form(...)):
     """Extracts timestamps from a specific image file using PGN context."""
     file_path = Path("uploads") / filename
     # If the filename starts with crop_, look in cropped/ directory
     if filename.startswith("crop_"):
         file_path = Path("cropped") / filename
-    
+
     if not file_path.exists():
         raise HTTPException(status_code=404, detail=f"File {filename} not found")
-        
+
     try:
         ts_fragment = extract_timestamps_from_image(str(file_path), pgn_context)
         return json.loads(ts_fragment)
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/validate-moves")
 async def validate_moves(req: ValidateRequest):
@@ -666,9 +780,11 @@ async def validate_moves(req: ValidateRequest):
             break
     return {"results": results}
 
+
 def _embed_analysis_in_pgn(pgn_text: str, analysis: list) -> str:
     """Embeds [%eval] and [%cpl] annotations into PGN move comments."""
     import re
+
     pgn_io = io.StringIO(pgn_text)
     game = chess.pgn.read_game(pgn_io)
     if not game:
@@ -684,7 +800,7 @@ def _embed_analysis_in_pgn(pgn_text: str, analysis: list) -> str:
         eval_str = f"{evaluation / 100.0:.2f}" if evaluation is not None else "0.00"
         existing = node.comment or ""
         clk_part = ""
-        clk_m = re.search(r'\[%clk\s+[^\]]+\]', existing)
+        clk_m = re.search(r"\[%clk\s+[^\]]+\]", existing)
         if clk_m:
             clk_part = clk_m.group(0) + " "
         node.comment = f"{clk_part}[%eval {eval_str}] [%cpl {int(cpl)}]".strip()
@@ -695,8 +811,12 @@ def _embed_analysis_in_pgn(pgn_text: str, analysis: list) -> str:
 def _save_pgn_file(title: str, pgn_text: str) -> str:
     games_dir = Path("games")
     games_dir.mkdir(exist_ok=True)
-    safe_title = "".join([c for c in title if c.isalnum() or c in (' ', '-', '_')]).rstrip() or "game"
+    safe_title = (
+        "".join([c for c in title if c.isalnum() or c in (" ", "-", "_")]).rstrip()
+        or "game"
+    )
     import time as time_mod
+
     filename = f"{safe_title}_{int(time_mod.time())}.pgn"
     with open(games_dir / filename, "w") as f:
         f.write(pgn_text)
@@ -707,9 +827,15 @@ def _save_pgn_file(title: str, pgn_text: str) -> str:
 def list_pgn_files():
     games_dir = Path("games")
     games_dir.mkdir(exist_ok=True)
-    files = sorted(games_dir.glob("*.pgn"), key=lambda f: f.stat().st_mtime, reverse=True)
+    files = sorted(
+        games_dir.glob("*.pgn"), key=lambda f: f.stat().st_mtime, reverse=True
+    )
     return [
-        {"filename": f.name, "title": "_".join(f.stem.split("_")[:-1]).replace("_", " "), "modified": f.stat().st_mtime}
+        {
+            "filename": f.name,
+            "title": "_".join(f.stem.split("_")[:-1]).replace("_", " "),
+            "modified": f.stat().st_mtime,
+        }
         for f in files
     ]
 
@@ -790,7 +916,7 @@ def evaluate_position(fen: str = Form(...), time_limit: float = Form(2.0)):
             return {"score": "0.0", "best_move": "", "pv": [], "depth": 0}
         score = info.get("score")
         pv = info.get("pv", [])
-        
+
         # Get score from white's perspective
         white_score = score.white().score()
         if white_score is None:
@@ -798,12 +924,12 @@ def evaluate_position(fen: str = Form(...), time_limit: float = Form(2.0)):
             mate = score.white().mate()
             score_text = f"M{mate}" if mate else "0.0"
         else:
-            score_text = f"{white_score/100:.2f}"
-            
+            score_text = f"{white_score / 100:.2f}"
+
         best_move_san = board.san(pv[0]) if pv else ""
         pv_san = []
         temp_board = board.copy()
-        for move in pv[:5]: # Return top 5 moves of PV
+        for move in pv[:5]:  # Return top 5 moves of PV
             pv_san.append(temp_board.san(move))
             temp_board.push(move)
 
@@ -813,13 +939,17 @@ def evaluate_position(fen: str = Form(...), time_limit: float = Form(2.0)):
             "pv": pv_san,
             "depth": info.get("depth"),
             "nps": info.get("nps"),
-            "nodes": info.get("nodes")
+            "nodes": info.get("nodes"),
         }
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-_eval_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="stockfish_eval")
+
+_eval_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="stockfish_eval"
+)
+
 
 @app.websocket("/api/ws/evaluate")
 async def websocket_evaluate(websocket: WebSocket):
@@ -833,7 +963,11 @@ async def websocket_evaluate(websocket: WebSocket):
         white_score = score.white().score()
         if white_score is None:
             mate = score.white().mate()
-            return (f"M{mate}" if mate and mate > 0 else f"-M{abs(mate)}") if mate else "0.00"
+            return (
+                (f"M{mate}" if mate and mate > 0 else f"-M{abs(mate)}")
+                if mate
+                else "0.00"
+            )
         return f"{'+' if white_score > 0 else ''}{white_score / 100:.2f}"
 
     def _pv_san(board: chess.Board, pv_moves, max_moves: int = 8):
@@ -853,12 +987,14 @@ async def websocket_evaluate(websocket: WebSocket):
             pv = line.get("pv", [])
             score = line.get("score")
             san_moves = _pv_san(board, pv)
-            lines.append({
-                "score": _score_text(score),
-                "best_move": san_moves[0] if san_moves else "",
-                "pv": san_moves,
-                "multipv": line.get("multipv", 1),
-            })
+            lines.append(
+                {
+                    "score": _score_text(score),
+                    "best_move": san_moves[0] if san_moves else "",
+                    "pv": san_moves,
+                    "multipv": line.get("multipv", 1),
+                }
+            )
         # Sort by multipv index so line 1 is always first
         lines.sort(key=lambda l: l["multipv"])
         top = lines[0] if lines else {}
@@ -869,7 +1005,9 @@ async def websocket_evaluate(websocket: WebSocket):
             "pv": top.get("pv", []),
             "lines": lines,
             "depth": result.get("depth"),
-            "nps": result.get("lines", [{}])[0].get("nps") if result.get("lines") else None,
+            "nps": result.get("lines", [{}])[0].get("nps")
+            if result.get("lines")
+            else None,
         }
 
     try:
@@ -891,10 +1029,14 @@ async def websocket_evaluate(websocket: WebSocket):
 
             def _stream_to_queue(b, tl):
                 try:
-                    for result in stockfish.get_multipv_stream(b, tl, num_lines=3, min_pv_depth=4):
+                    for result in stockfish.get_multipv_stream(
+                        b, tl, num_lines=3, min_pv_depth=4
+                    ):
                         asyncio.run_coroutine_threadsafe(queue.put(result), loop)
                 except Exception as exc:
-                    asyncio.run_coroutine_threadsafe(queue.put({"error": str(exc)}), loop)
+                    asyncio.run_coroutine_threadsafe(
+                        queue.put({"error": str(exc)}), loop
+                    )
                 finally:
                     asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
@@ -905,7 +1047,9 @@ async def websocket_evaluate(websocket: WebSocket):
                 if result is None:
                     break
                 if "error" in result:
-                    await websocket.send_json({"status": "error", "message": result["error"]})
+                    await websocket.send_json(
+                        {"status": "error", "message": result["error"]}
+                    )
                     break
                 await websocket.send_json(_format_multipv(board, result))
 
@@ -920,11 +1064,12 @@ async def websocket_evaluate(websocket: WebSocket):
         except Exception:
             pass
 
+
 @app.websocket("/api/ws/full-analysis")
 async def websocket_full_analysis(websocket: WebSocket):
     await websocket.accept()
     global stockfish
-    
+
     try:
         data = await websocket.receive_text()
         msg = json.loads(data)
@@ -932,12 +1077,8 @@ async def websocket_full_analysis(websocket: WebSocket):
         pgn_text = msg.get("pgn", "")
         depth = msg.get("depth", "Standard")
         game_uuid = msg.get("game_uuid")
-        
-        depth_map = {
-            'Fast': 0.5,
-            'Standard': 2.0,
-            'Deep': 10.0
-        }
+
+        depth_map = {"Fast": 0.5, "Standard": 2.0, "Deep": 10.0}
         time_limit = depth_map.get(depth, 2.0)
 
         config = get_config()
@@ -947,8 +1088,11 @@ async def websocket_full_analysis(websocket: WebSocket):
         # Save PGN
         games_dir = Path("games")
         games_dir.mkdir(exist_ok=True)
-        safe_title = "".join([c for c in title if c.isalnum() or c in (' ', '-', '_')]).rstrip()
+        safe_title = "".join(
+            [c for c in title if c.isalnum() or c in (" ", "-", "_")]
+        ).rstrip()
         import time as time_mod
+
         filename = f"{safe_title or 'game'}_{int(time_mod.time())}.pgn"
         # Parse PGN
         pgn_io = io.StringIO(pgn_text)
@@ -961,54 +1105,63 @@ async def websocket_full_analysis(websocket: WebSocket):
         total_moves = len(moves)
         analysis_results = []
         board = game.board()
-        
+
         tc = game.headers.get("TimeControl", "")
         start_time, increment = stockfish._parse_time_control(tc)
-        
+
         last_times = {
-            "white": start_time if start_time > 0 else None, 
-            "black": start_time if start_time > 0 else None
+            "white": start_time if start_time > 0 else None,
+            "black": start_time if start_time > 0 else None,
         }
-        
+
         for ply, move in enumerate(moves, 1):
             # Debug: log the move being sent to Stockfish
             move_san = board.san(move)
             move_uci = move.uci()
             # Verify board state matches expected game position
             expected_board = game.board()
-            for i, m in enumerate(moves[:ply-1]):
+            for i, m in enumerate(moves[: ply - 1]):
                 expected_board.push(m)
             if board.fen() != expected_board.fen():
-                print(f"[ANALYSIS-DRIFT] ply={ply} board drifted! expected={expected_board.fen()} actual={board.fen()}", flush=True)
+                print(
+                    f"[ANALYSIS-DRIFT] ply={ply} board drifted! expected={expected_board.fen()} actual={board.fen()}",
+                    flush=True,
+                )
                 board = expected_board
-            print(f"[ANALYSIS] ply={ply} san={move_san} uci={move_uci} fen_before={board.fen()}", flush=True)
+            print(
+                f"[ANALYSIS] ply={ply} san={move_san} uci={move_uci} fen_before={board.fen()}",
+                flush=True,
+            )
 
             # Send progress update
-            await websocket.send_json({
-                "status": "progress",
-                "current_move": board.san(move),
-                "label": f"{(ply + 1) // 2}{'w' if ply % 2 != 0 else 'b'}",
-                "ply": ply,
-                "total": total_moves,
-                "percent": int((ply / total_moves) * 100)
-            })
+            await websocket.send_json(
+                {
+                    "status": "progress",
+                    "current_move": board.san(move),
+                    "label": f"{(ply + 1) // 2}{'w' if ply % 2 != 0 else 'b'}",
+                    "ply": ply,
+                    "total": total_moves,
+                    "percent": int((ply / total_moves) * 100),
+                }
+            )
 
             node = game.root()
             for _ in range(ply):
                 node = node.variation(0)
-            
+
             import _sqlite3
             import sqlite3
             from database import DB_PATH
+
             conn = sqlite3.connect(str(DB_PATH))
             conn.row_factory = sqlite3.Row
             # Try to pass a stream function down to _analyze_move_node to stream thoughts back to websocket
             # But await is tricky inside sync functions... so we'll just poll or we'll wrap a small stream call here
-            
+
             # Since _analyze_move_node blocks waiting for get_cpl_for_move
             # Let's stream engine thoughts directly here right before we run _analyze_move_node
             # We skip this if it's already fast but streaming is cool.
-            
+
             async def stream_callback(info):
                 pv_moves = info.get("pv", [])
                 pv_san = ""
@@ -1022,19 +1175,26 @@ async def websocket_full_analysis(websocket: WebSocket):
                         except Exception:
                             break
                     pv_san = " ".join(pv_parts)
-                await websocket.send_json({
-                    "status": "engine_thoughts",
-                    "depth": info.get("depth", 0),
-                    "score": f"{info.get('score').white().score()/100:.2f}" if (info.get("score") and info.get("score").white().score() is not None) else "",
-                    "nps": info.get("nps", 0),
-                    "pv": pv_san
-                })
-            
+                await websocket.send_json(
+                    {
+                        "status": "engine_thoughts",
+                        "depth": info.get("depth", 0),
+                        "score": f"{info.get('score').white().score() / 100:.2f}"
+                        if (
+                            info.get("score")
+                            and info.get("score").white().score() is not None
+                        )
+                        else "",
+                        "nps": info.get("nps", 0),
+                        "pv": pv_san,
+                    }
+                )
+
             # Since engine is sync right now and run via blocking generator, we'll run a quick stream
             # Wait, best to use stockfish.get_analysis_stream(board, time_limit)
             # Actually, `get_cpl_for_move` internally uses `engine.analyse` which blocks.
             # So let's run the stream here, THEN calculate CPL (which will be instantaneous due to hash tables / cached evaluations in python-chess engine)
-            
+
             last_stream_info = None
             for info in stockfish.get_analysis_stream(board, time_limit=time_limit):
                 await stream_callback(info)
@@ -1042,7 +1202,16 @@ async def websocket_full_analysis(websocket: WebSocket):
                 if "error" not in info:
                     last_stream_info = info
 
-            move_data = stockfish._analyze_move_node(node, board, ply, last_times, increment, time_limit, conn, pre_eval=last_stream_info)
+            move_data = stockfish._analyze_move_node(
+                node,
+                board,
+                ply,
+                last_times,
+                increment,
+                time_limit,
+                conn,
+                pre_eval=last_stream_info,
+            )
             conn.close()
             analysis_results.append(move_data)
             board.push(move)
@@ -1059,15 +1228,17 @@ async def websocket_full_analysis(websocket: WebSocket):
             except Exception:
                 pass
 
-        await websocket.send_json({
-            "status": "success",
-            "title": title,
-            "pgn": pgn_text,
-            "depth": depth,
-            "analysis": analysis_results,
-            "game_id": saved_game_id,
-            "game_uuid": game_uuid,
-        })
+        await websocket.send_json(
+            {
+                "status": "success",
+                "title": title,
+                "pgn": pgn_text,
+                "depth": depth,
+                "analysis": analysis_results,
+                "game_id": saved_game_id,
+                "game_uuid": game_uuid,
+            }
+        )
 
     except WebSocketDisconnect:
         print("Analysis WebSocket disconnected")
@@ -1078,6 +1249,7 @@ async def websocket_full_analysis(websocket: WebSocket):
         except:
             pass
 
+
 @app.post("/api/upload-only")
 async def upload_only(file: UploadFile = File(...)):
     uploads_dir = Path("uploads")
@@ -1087,18 +1259,15 @@ async def upload_only(file: UploadFile = File(...)):
         buffer.write(await file.read())
     return {"file_url": f"/uploads/{file.filename}"}
 
+
 @app.post("/api/import-pgn")
 def import_pgn(data: dict):
     title = data.get("title", "Imported Game")
     pgn_text = data.get("pgn", "")
     depth = data.get("depth", "Standard")
-    
+
     # Map depth to time limit
-    depth_map = {
-        'Fast': 2.0,
-        'Standard': 10.0,
-        'Deep': 30.0
-    }
+    depth_map = {"Fast": 2.0, "Standard": 10.0, "Deep": 30.0}
     time_limit = depth_map.get(depth, 10.0)
 
     global stockfish
@@ -1124,11 +1293,12 @@ def import_pgn(data: dict):
             "title": title,
             "pgn": pgn_text,
             "depth": depth,
-            "analysis": analysis_results
+            "analysis": analysis_results,
         }
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
 
 # ── Chess.com Proxy ────────────────────────────────────────────────────────────
 
@@ -1139,6 +1309,7 @@ _cc_cache: dict = {}  # simple in-memory cache: key -> {'data': ..., 'expires': 
 async def chesscom_archives(username: str):
     """Proxy to Chess.com API: list game archives for a player."""
     import time as _t
+
     cache_key = f"archives:{username}"
     cached = _cc_cache.get(cache_key)
     if cached and cached["expires"] > _t.time():
@@ -1153,7 +1324,9 @@ async def chesscom_archives(username: str):
     if resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Username not found on Chess.com")
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Chess.com API error: {resp.status_code}")
+        raise HTTPException(
+            status_code=502, detail=f"Chess.com API error: {resp.status_code}"
+        )
 
     data = resp.json()
     _cc_cache[cache_key] = {"data": data, "expires": _t.time() + 300}
@@ -1161,18 +1334,21 @@ async def chesscom_archives(username: str):
 
 
 @app.get("/api/chesscom/games")
-async def chesscom_games(username: str, year: int, month: int, offset: int = 0, limit: int = 30):
+async def chesscom_games(
+    username: str, year: int, month: int, offset: int = 0, limit: int = 30
+):
     """Proxy to Chess.com API: fetch games for a given month, parsed into a cleaner list.
 
     On cache miss: streams the PGN response and yields each game as NDJSON
     so the full parsed list never exists in memory simultaneously.
     On cache hit: returns JSON (fast path, unchanged)."""
     import time as _t
+
     cache_key = f"games:{username}:{year}:{month}"
     cached = _cc_cache.get(cache_key)
     if cached and cached["expires"] > _t.time():
         games_list = cached["data"]
-        return {"games": games_list[offset:offset + limit], "total": len(games_list)}
+        return {"games": games_list[offset : offset + limit], "total": len(games_list)}
 
     url = f"https://api.chess.com/pub/player/{username}/games/{year}/{month:02d}/pgn"
 
@@ -1180,10 +1356,13 @@ async def chesscom_games(username: str, year: int, month: int, offset: int = 0, 
         """Stream-parse the PGN response. Yields each game as a JSON line.
         Also caches the full list after parsing completes."""
         import time as _t2
+
         parsed_all = []
 
         try:
-            resp = await _http_client.get(url, headers={"User-Agent": "ChessAnalyzer/1.0"})
+            resp = await _http_client.get(
+                url, headers={"User-Agent": "ChessAnalyzer/1.0"}
+            )
         except httpx.HTTPError as exc:
             yield json.dumps({"error": f"Chess.com API error: {exc}"}) + "\n"
             return
@@ -1192,7 +1371,9 @@ async def chesscom_games(username: str, year: int, month: int, offset: int = 0, 
             yield json.dumps({"error": "Username not found on Chess.com"}) + "\n"
             return
         if resp.status_code != 200:
-            yield json.dumps({"error": f"Chess.com API error: {resp.status_code}"}) + "\n"
+            yield (
+                json.dumps({"error": f"Chess.com API error: {resp.status_code}"}) + "\n"
+            )
             return
 
         # Incrementally parse the PGN response body — no buffering the full list
@@ -1262,7 +1443,9 @@ async def chesscom_import(req: ChessComImportRequest):
         title = entry.get("title")
         if not title and parsed_game:
             h = parsed_game.headers
-            title = f"{h.get('White', '?')} vs {h.get('Black', '?')} ({h.get('Date', '?')})"
+            title = (
+                f"{h.get('White', '?')} vs {h.get('Black', '?')} ({h.get('Date', '?')})"
+            )
         elif not title:
             title = "Imported Game"
 
@@ -1276,6 +1459,7 @@ async def chesscom_import(req: ChessComImportRequest):
                     conn_check = None
                     try:
                         from database import _get_db
+
                         conn_check = _get_db()
                         existing_row = None
                         if existing_uuid:
@@ -1284,7 +1468,8 @@ async def chesscom_import(req: ChessComImportRequest):
                             ).fetchone()
                         if not existing_row and title:
                             existing_row = conn_check.execute(
-                                "SELECT id FROM games WHERE title=? COLLATE NOCASE", (title,)
+                                "SELECT id FROM games WHERE title=? COLLATE NOCASE",
+                                (title,),
                             ).fetchone()
                         if existing_row:
                             skipped += 1
@@ -1315,7 +1500,12 @@ async def chesscom_import(req: ChessComImportRequest):
                 if parsed_game:
                     # Generate a stable-ish UUID from PGN content
                     import hashlib
-                    game_uuid = hashlib.md5(pgn_text.encode()).hexdigest()[:8] + "-" + str(_uuid.uuid4())[:8]
+
+                    game_uuid = (
+                        hashlib.md5(pgn_text.encode()).hexdigest()[:8]
+                        + "-"
+                        + str(_uuid.uuid4())[:8]
+                    )
                 job_req = _QueueAddReq(
                     game_uuid=game_uuid,
                     title=title,
@@ -1323,7 +1513,11 @@ async def chesscom_import(req: ChessComImportRequest):
                     depth=req.depth,
                 )
                 # Check if already queued
-                if any(j["game_uuid"] == job_req.game_uuid and j["status"] in ("queued", "analyzing") for j in _queue_jobs):
+                if any(
+                    j["game_uuid"] == job_req.game_uuid
+                    and j["status"] in ("queued", "analyzing")
+                    for j in _queue_jobs
+                ):
                     skipped += 1
                     details.append({"title": title, "status": "skipped"})
                 else:
@@ -1349,7 +1543,9 @@ _lichess_cache: dict = {}
 
 
 @app.get("/api/lichess/games")
-async def lichess_games(username: str, max: int = 50, perf_type: str = "", offset: int = 0, limit: int = 30):
+async def lichess_games(
+    username: str, max: int = 50, perf_type: str = "", offset: int = 0, limit: int = 30
+):
     """Proxy to Lichess API: fetch recent games for a player as structured list."""
     import time as _t
     from datetime import datetime as _dt
@@ -1358,7 +1554,7 @@ async def lichess_games(username: str, max: int = 50, perf_type: str = "", offse
     cached = _lichess_cache.get(cache_key)
     if cached and cached["expires"] > _t.time():
         games_list = cached["data"]
-        return {"games": games_list[offset:offset + limit], "total": len(games_list)}
+        return {"games": games_list[offset : offset + limit], "total": len(games_list)}
 
     params: dict = {
         "max": min(max, 300),
@@ -1372,8 +1568,12 @@ async def lichess_games(username: str, max: int = 50, perf_type: str = "", offse
     url = f"https://lichess.org/api/games/user/{username}"
     try:
         resp = await _http_client.get(
-            url, params=params,
-            headers={"Accept": "application/x-ndjson", "User-Agent": "ChessAnalyzer/1.0"},
+            url,
+            params=params,
+            headers={
+                "Accept": "application/x-ndjson",
+                "User-Agent": "ChessAnalyzer/1.0",
+            },
         )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Lichess API error: {exc}")
@@ -1381,9 +1581,13 @@ async def lichess_games(username: str, max: int = 50, perf_type: str = "", offse
     if resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Username not found on Lichess")
     if resp.status_code == 429:
-        raise HTTPException(status_code=429, detail="Lichess rate limit reached — please wait a moment")
+        raise HTTPException(
+            status_code=429, detail="Lichess rate limit reached — please wait a moment"
+        )
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Lichess API error: {resp.status_code}")
+        raise HTTPException(
+            status_code=502, detail=f"Lichess API error: {resp.status_code}"
+        )
 
     games = []
     for line in resp.text.splitlines():
@@ -1400,14 +1604,24 @@ async def lichess_games(username: str, max: int = 50, perf_type: str = "", offse
 
         white_p = g.get("players", {}).get("white", {})
         black_p = g.get("players", {}).get("black", {})
-        white = white_p.get("user", {}).get("name") or f"AI lv{white_p.get('aiLevel', '?')}"
-        black = black_p.get("user", {}).get("name") or f"AI lv{black_p.get('aiLevel', '?')}"
+        white = (
+            white_p.get("user", {}).get("name") or f"AI lv{white_p.get('aiLevel', '?')}"
+        )
+        black = (
+            black_p.get("user", {}).get("name") or f"AI lv{black_p.get('aiLevel', '?')}"
+        )
 
         winner = g.get("winner")
-        result = "1-0" if winner == "white" else "0-1" if winner == "black" else "1/2-1/2"
+        result = (
+            "1-0" if winner == "white" else "0-1" if winner == "black" else "1/2-1/2"
+        )
 
         created_ms = g.get("createdAt", 0)
-        date_str = _dt.utcfromtimestamp(created_ms / 1000).strftime("%Y.%m.%d") if created_ms else ""
+        date_str = (
+            _dt.utcfromtimestamp(created_ms / 1000).strftime("%Y.%m.%d")
+            if created_ms
+            else ""
+        )
 
         opening = g.get("opening") or {}
         clock = g.get("clock") or {}
@@ -1416,24 +1630,26 @@ async def lichess_games(username: str, max: int = 50, perf_type: str = "", offse
         else:
             tc_str = g.get("speed", "")
 
-        games.append({
-            "url": f"https://lichess.org/{g.get('id', '')}",
-            "white": white,
-            "black": black,
-            "white_rating": white_p.get("rating", 0),
-            "black_rating": black_p.get("rating", 0),
-            "date": date_str,
-            "result": result,
-            "eco": opening.get("eco", ""),
-            "opening": opening.get("name", ""),
-            "event": f"Lichess {g.get('speed', '').title()}",
-            "time_control": tc_str,
-            "pgn": g.get("pgn", ""),
-            "rated": g.get("rated", False),
-        })
+        games.append(
+            {
+                "url": f"https://lichess.org/{g.get('id', '')}",
+                "white": white,
+                "black": black,
+                "white_rating": white_p.get("rating", 0),
+                "black_rating": black_p.get("rating", 0),
+                "date": date_str,
+                "result": result,
+                "eco": opening.get("eco", ""),
+                "opening": opening.get("name", ""),
+                "event": f"Lichess {g.get('speed', '').title()}",
+                "time_control": tc_str,
+                "pgn": g.get("pgn", ""),
+                "rated": g.get("rated", False),
+            }
+        )
 
     _lichess_cache[cache_key] = {"data": games, "expires": _t.time() + 60}
-    return {"games": games[offset:offset + limit], "total": len(games)}
+    return {"games": games[offset : offset + limit], "total": len(games)}
 
 
 class LichessImportRequest(BaseModel):
@@ -1445,16 +1661,18 @@ class LichessImportRequest(BaseModel):
 @app.post("/api/lichess/import")
 async def lichess_import(req: LichessImportRequest):
     """Import Lichess games — identical pipeline to Chess.com import."""
-    cc_req = ChessComImportRequest(games=req.games, depth=req.depth, username=req.username)
+    cc_req = ChessComImportRequest(
+        games=req.games, depth=req.depth, username=req.username
+    )
     return await chesscom_import(cc_req)
 
 
 # ── Background Analysis Queue ─────────────────────────────────────────────────
 
-_queue_jobs: list = []          # list of job dicts, mutated under GIL
+_queue_jobs: list = []  # list of job dicts, mutated under GIL
 _queue_sf: Optional[StockfishAnalyzer] = None  # dedicated engine for queue
-_queue_cancel = threading.Event()              # set to abort the running job
-_queue_clients: set = set()                   # connected /api/ws/queue WebSockets
+_queue_cancel = threading.Event()  # set to abort the running job
+_queue_clients: set = set()  # connected /api/ws/queue WebSockets
 _queue_loop_ref: Optional[asyncio.AbstractEventLoop] = None  # for thread-safe broadcast
 
 
@@ -1483,9 +1701,252 @@ def _broadcast_queue_threadsafe():
 
 @app.on_event("startup")
 async def _start_queue_worker():
-    global _queue_loop_ref
+    global _queue_loop_ref, _queue_jobs
     _queue_loop_ref = asyncio.get_event_loop()
+    _queue_jobs = load_jobs()
     asyncio.create_task(_queue_loop())
+
+
+def _fetch_games_sync(
+    platform: str, username: str, limit: int = 100, on_progress=None
+) -> list:
+    """Synchronously fetch up to `limit` recent games. Used inside worker threads.
+
+    Args:
+        platform: 'chesscom' or 'lichess'
+        username: player username
+        limit: max games to return (default 100)
+        on_progress: optional callback(year, month, games_so_far) called after each
+                     Chess.com month fetch to report granular progress.
+    """
+    import httpx as _hx
+    from datetime import datetime as _dt
+
+    games: list = []
+
+    if platform in ("chesscom", "chess.com"):
+        now = _dt.utcnow()
+        year, month = now.year, now.month
+        import logging as _log
+
+        username = (
+            username.lower()
+        )  # Chess.com usernames are case-insensitive; API redirects to lowercase
+        for _ in range(18):
+            url = f"https://api.chess.com/pub/player/{username}/games/{year}/{month:02d}/pgn"
+            try:
+                r = _hx.get(
+                    url, timeout=30.0, headers={"User-Agent": "ChessAnalyzer/1.0"}
+                )
+                _log.debug(f"[fetch] {username} {year}.{month:02d} -> {r.status_code}")
+                if r.status_code == 200:
+                    pgn_stream = io.StringIO(r.text)
+                    month_games = []
+                    while True:
+                        try:
+                            g = chess.pgn.read_game(pgn_stream)
+                        except Exception as _exc:
+                            _log.warning(
+                                f"[fetch] parse error {username} {year}.{month:02d}: {_exc}"
+                            )
+                            break
+                        if g is None:
+                            break
+                        h = g.headers
+                        month_games.append(
+                            {
+                                "pgn": str(g),
+                                "white": h.get("White", ""),
+                                "black": h.get("Black", ""),
+                                "date": h.get("Date", ""),
+                            }
+                        )
+                    games = month_games + games
+                    if on_progress:
+                        on_progress(year, month, len(games))
+                elif r.status_code == 404:
+                    _log.info(
+                        f"[fetch] {username} not found on Chess.com ({year}.{month:02d})"
+                    )
+                elif r.status_code == 429:
+                    _log.warning(f"[fetch] Chess.com rate limited for {username}")
+                else:
+                    _log.warning(
+                        f"[fetch] {username} unexpected status {r.status_code} ({year}.{month:02d})"
+                    )
+            except Exception as _exc:
+                _log.warning(f"[fetch] {username} request failed: {_exc}")
+            if len(games) >= limit:
+                break
+            month -= 1
+            if month == 0:
+                month = 12
+                year -= 1
+
+    elif platform == "lichess":
+        if on_progress:
+            on_progress(None, None, 0)
+        url = f"https://lichess.org/api/games/user/{username}"
+        try:
+            r = _hx.get(
+                url,
+                params={"max": limit, "clocks": "true", "pgnInJson": "true"},
+                headers={"Accept": "application/x-ndjson"},
+                timeout=60.0,
+            )
+            for line in r.text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    g = json.loads(line)
+                    if g.get("status") in ("aborted", "noStart"):
+                        continue
+                    if g.get("pgn"):
+                        wp = g.get("players", {}).get("white", {})
+                        bp = g.get("players", {}).get("black", {})
+                        games.append(
+                            {
+                                "pgn": g["pgn"],
+                                "white": wp.get("user", {}).get("name", "?"),
+                                "black": bp.get("user", {}).get("name", "?"),
+                                "date": "",
+                            }
+                        )
+                except Exception:
+                    continue
+            if on_progress:
+                on_progress(None, None, len(games))
+        except Exception:
+            pass
+
+    return games[:limit]
+
+
+def _run_cheat_batch_job(job: dict, cancel: threading.Event):
+    """Fetch last 100 games for a player, analyze each, build live aggregate cheat report."""
+    global _queue_sf
+
+    platform = job["platform"]
+    username = job["username"]
+    side = job.get("side", "opponent")
+    depth = job.get("depth", "Standard")
+
+    config = get_config()
+    if _queue_sf is None:
+        _queue_sf = _build_stockfish(config)
+
+    job["progress"] = {
+        "percent": 0,
+        "current_game": "Fetching games…",
+        "game_title": "",
+    }
+    _broadcast_queue_threadsafe()
+    save_job(job)
+
+    def _on_fetch_progress(year, month, count):
+        label = f"Fetching {year}.{month:02d}…" if year else "Fetching from Lichess…"
+        job["progress"] = {
+            "percent": 2,
+            "current_game": label,
+            "game_title": f"{count} games found",
+        }
+        _broadcast_queue_threadsafe()
+        save_job(job)
+
+    raw_games = _fetch_games_sync(
+        platform, username, limit=100, on_progress=_on_fetch_progress
+    )
+    if not raw_games:
+        job["status"] = "error"
+        job["error"] = f"No games found for {username} on {platform}"
+        _broadcast_queue_threadsafe()
+        save_job(job)
+        return
+
+    total = len(raw_games)
+    job["games_fetched"] = total
+    job["games_total"] = total
+    job["games_analyzed"] = 0
+    _broadcast_queue_threadsafe()
+    save_job(job)
+
+    analyzed_ids: list = []
+
+    # ── 2. Analyze each game ──────────────────────────────────────────────────
+    for i, entry in enumerate(raw_games):
+        if cancel.is_set():
+            job["status"] = "cancelled"
+            _broadcast_queue_threadsafe()
+            return
+
+        pgn_text = entry.get("pgn", "")
+        if not pgn_text:
+            continue
+
+        white_name = entry.get("white", "") or ""
+        black_name = entry.get("black", "") or ""
+        is_white = white_name.lower() == username.lower()
+        is_black = black_name.lower() == username.lower()
+        target_side = "white" if is_white else "black" if is_black else None
+        label = f"{white_name} vs {black_name}"
+        job["progress"] = {
+            "percent": 20 + int(i / total * 80),
+            "current_game": f"{i + 1}/{total}",
+            "game_title": label,
+        }
+        _broadcast_queue_threadsafe()
+        save_job(job)
+
+        import uuid as _uuid
+
+        mini = {
+            "job_id": str(_uuid.uuid4())[:8],
+            "game_uuid": str(_uuid.uuid4()),
+            "game_id": None,
+            "title": label,
+            "pgn": pgn_text,
+            "depth": depth,
+            "status": "analyzing",
+            "progress": {},
+            "error": None,
+            "result_game_id": None,
+            "target_side": target_side,
+        }
+
+        try:
+            _run_queue_job(mini, cancel)
+        except Exception as exc:
+            import logging as _log
+
+            _log.warning(f"[cheat_batch] game {i + 1} failed: {exc}")
+            continue
+
+        if mini.get("result_game_id"):
+            analyzed_ids.append(mini["result_game_id"])
+            job["games_analyzed"] = len(analyzed_ids)
+
+            from utils.aggregate_report import compute_aggregate_report
+
+            try:
+                partial = compute_aggregate_report(analyzed_ids, side)
+                job["cheat_aggregate"] = partial.to_dict()
+            except Exception as exc:
+                import logging as _log
+
+                _log.warning(f"[cheat_batch] aggregate failed: {exc}")
+
+            _broadcast_queue_threadsafe()
+            save_job(job)
+
+    job["progress"] = {
+        "percent": 100,
+        "current_game": f"{len(analyzed_ids)}/{total}",
+        "game_title": "Complete",
+    }
+    job["status"] = "done"
+    _broadcast_queue_threadsafe()
+    save_job(job)
 
 
 async def _queue_loop():
@@ -1498,16 +1959,21 @@ async def _queue_loop():
 
         job["status"] = "analyzing"
         _queue_cancel.clear()
-        await _broadcast_queue()  # push: queued → analyzing
+        save_job(job)
+        await _broadcast_queue()
 
         try:
-            await asyncio.to_thread(_run_queue_job, job, _queue_cancel)
+            if job.get("job_type") == "cheat_batch":
+                await asyncio.to_thread(_run_cheat_batch_job, job, _queue_cancel)
+            else:
+                await asyncio.to_thread(_run_queue_job, job, _queue_cancel)
         except Exception as exc:
             traceback.print_exc()
             if job["status"] not in ("done", "cancelled"):
                 job["status"] = "error"
                 job["error"] = str(exc)
-        await _broadcast_queue()  # push: final state (done / error / cancelled)
+                save_job(job)
+        await _broadcast_queue()
 
         await asyncio.sleep(0.2)
 
@@ -1544,19 +2010,26 @@ def _run_queue_job(job: dict, cancel: threading.Event):
             if cancel.is_set():
                 job["status"] = "cancelled"
                 _broadcast_queue_threadsafe()
+                save_job(job)
                 return
-            print(f"[QUEUE-ANALYSIS] ply={ply} san={board.san(move)} uci={move.uci()} fen_before={board.fen()}", flush=True)
+            print(
+                f"[QUEUE-ANALYSIS] ply={ply} san={board.san(move)} uci={move.uci()} fen_before={board.fen()}",
+                flush=True,
+            )
             job["progress"] = {
                 "percent": int((ply - 1) / total * 100),
                 "current_move": board.san(move),
                 "ply": ply,
                 "total": total,
             }
-            _broadcast_queue_threadsafe()  # push progress update
+            _broadcast_queue_threadsafe()
+            save_job(job)
             node = game.root()
             for _ in range(ply):
                 node = node.variation(0)
-            results.append(_queue_sf._analyze_move_node(node, board, ply, last_t, inc, tl, conn))
+            results.append(
+                _queue_sf._analyze_move_node(node, board, ply, last_t, inc, tl, conn)
+            )
             board.push(move)
     finally:
         conn.close()
@@ -1564,16 +2037,27 @@ def _run_queue_job(job: dict, cancel: threading.Event):
     if cancel.is_set():
         job["status"] = "cancelled"
         _broadcast_queue_threadsafe()
+        save_job(job)
         return
 
     game_json = _pgn_to_game_json(job["pgn"], results, job["title"])
     if game_json:
         game_json["uuid"] = job["game_uuid"]
-        job["result_game_id"] = save_game(game_json, analysis_depth=job.get("depth", "Standard"))
+        if job.get("target_side"):
+            game_json.setdefault("metadata", {})["target_side"] = job["target_side"]
+        job["result_game_id"] = save_game(
+            game_json, analysis_depth=job.get("depth", "Standard")
+        )
 
-    job["progress"] = {"percent": 100, "current_move": "Complete", "ply": total, "total": total}
+    job["progress"] = {
+        "percent": 100,
+        "current_move": "Complete",
+        "ply": total,
+        "total": total,
+    }
     job["status"] = "done"
-    _broadcast_queue_threadsafe()  # push: done with result_game_id
+    _broadcast_queue_threadsafe()
+    save_job(job)
 
 
 class _QueueAddReq(BaseModel):
@@ -1606,15 +2090,25 @@ async def websocket_queue(websocket: WebSocket):
 @app.post("/api/queue")
 async def queue_add(req: _QueueAddReq):
     import uuid as _uuid
+
     global _queue_jobs
-    # Prevent duplicate queuing of the same game while already active
-    if any(j["game_uuid"] == req.game_uuid and j["status"] in ("queued", "analyzing") for j in _queue_jobs):
+    if any(
+        j["game_uuid"] == req.game_uuid and j["status"] in ("queued", "analyzing")
+        for j in _queue_jobs
+    ):
         existing = next(j for j in _queue_jobs if j["game_uuid"] == req.game_uuid)
         return {"job_id": existing["job_id"], "duplicate": True}
-    # Remove any stale terminal entries (error/done/cancelled) for this game before re-queuing
-    _queue_jobs = [j for j in _queue_jobs if not (j["game_uuid"] == req.game_uuid and j["status"] in ("error", "done", "cancelled"))]
+    _queue_jobs = [
+        j
+        for j in _queue_jobs
+        if not (
+            j["game_uuid"] == req.game_uuid
+            and j["status"] in ("error", "done", "cancelled")
+        )
+    ]
     job = {
         "job_id": str(_uuid.uuid4())[:8],
+        "job_type": "analysis",
         "game_uuid": req.game_uuid,
         "game_id": req.game_id,
         "title": req.title,
@@ -1626,10 +2120,11 @@ async def queue_add(req: _QueueAddReq):
         "result_game_id": None,
     }
     _queue_jobs.append(job)
+    save_job(job)
     try:
-        await _broadcast_queue()  # push: new job added
+        await _broadcast_queue()
     except Exception:
-        pass  # best-effort; client will pick up state on next poll
+        pass
     return {"job_id": job["job_id"]}
 
 
@@ -1647,10 +2142,12 @@ async def queue_remove(job_id: str):
     if job["status"] == "analyzing":
         _queue_cancel.set()
     _queue_jobs = [j for j in _queue_jobs if j["job_id"] != job_id]
-    await _broadcast_queue()  # push: job removed
+    delete_job(job_id)
+    await _broadcast_queue()
     return {"status": "ok"}
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=9001)

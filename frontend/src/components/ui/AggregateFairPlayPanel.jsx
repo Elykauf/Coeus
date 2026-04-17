@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import {
-  BarChart, Bar, LineChart, Line,
+  BarChart, Bar, Cell, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 
@@ -102,7 +102,7 @@ export default function AggregateFairPlayPanel({ gameIds, side = 'opponent', onC
                     />
                     <Bar dataKey="count" radius={[3, 3, 0, 0]}>
                       {distData.map((entry, i) => (
-                        <rect key={i} fill={entry.fill} />
+                        <Cell key={i} fill={entry.fill} />
                       ))}
                     </Bar>
                   </BarChart>

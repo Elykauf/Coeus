@@ -3,13 +3,13 @@
 
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Filter, Search } from "lucide-react";
+import { Filter, Search, ShieldAlert } from "lucide-react";
 import axios from "axios";
 
 import { useBoardColors } from "../hooks/useBoardColors";
 import { useGameFetch } from "../hooks/useGameFetch";
 import { formatMonth, groupByMonth } from "../utils/games";
-import { ConfirmModal, GameCard, GameCardSkeleton } from "./ui";
+import { ConfirmModal, GameCard, GameCardSkeleton, AggregateFairPlayPanel, PlayerFairPlayModal } from "./ui";
 import AnalyzeModal from "./AnalyzeModal";
 import OpeningExplorer from "./OpeningExplorer";
 import { reconstructPgn } from "../utils/games";
@@ -37,6 +37,17 @@ function GameList({
   const [hoveredId, setHoveredId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [analyzeTarget, setAnalyzeTarget] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showAggregate, setShowAggregate] = useState(false);
+
+  const toggleSelect = (id, e) => {
+    e.stopPropagation();
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
 
   const initiateDelete = (g) =>
     setConfirmDelete({ id: g.id, title: g.title, uuid: g.uuid || "" });
@@ -131,6 +142,41 @@ function GameList({
 
   return (
     <div style={{ maxWidth: 860, margin: "0 auto" }}>
+      {showAggregate && selectedIds.size > 0 && (
+        <AggregateFairPlayPanel
+          gameIds={Array.from(selectedIds)}
+          side="opponent"
+          onClose={() => setShowAggregate(false)}
+        />
+      )}
+
+      {selectedIds.size > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          background: "var(--bg-elevated)", border: "1px solid var(--border-dim)",
+          borderRadius: "var(--radius-md)", padding: "8px 14px",
+          marginBottom: "var(--space-md)", fontSize: 13,
+        }}>
+          <span style={{ flex: 1, color: "var(--text-secondary)" }}>
+            {selectedIds.size} game{selectedIds.size !== 1 ? "s" : ""} selected
+          </span>
+          <button
+            className="btn btn-primary"
+            style={{ padding: "4px 12px", fontSize: 12 }}
+            onClick={() => setShowAggregate(true)}
+          >
+            Analyze for Fair Play
+          </button>
+          <button
+            className="btn btn-secondary"
+            style={{ padding: "4px 10px", fontSize: 12 }}
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {confirmDelete && (
         <ConfirmModal
           title="Delete Game"
@@ -199,17 +245,26 @@ function GameList({
             }}
           >
             {dayGames.map((g) => (
-              <GameCard
-                key={g.id}
-                g={g}
-                boardColors={boardColors}
-                hoveredId={hoveredId}
-                activeId={activeId}
-                onLoad={loadGame}
-                onEdit={editGame}
-                onDeep={setAnalyzeTarget}
-                onDelete={initiateDelete}
-              />
+              <div key={g.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(g.id)}
+                  onChange={(e) => toggleSelect(g.id, e)}
+                  style={{ width: 16, height: 16, flexShrink: 0, cursor: "pointer", accentColor: "var(--accent)" }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <GameCard
+                    g={g}
+                    boardColors={boardColors}
+                    hoveredId={hoveredId}
+                    activeId={activeId}
+                    onLoad={loadGame}
+                    onEdit={editGame}
+                    onDeep={setAnalyzeTarget}
+                    onDelete={initiateDelete}
+                  />
+                </div>
+              </div>
             ))}
           </div>
         </div>
@@ -223,6 +278,7 @@ function GameList({
 export default function Games({ setAnalysis, analysis }) {
   const navigate = useNavigate();
   const [tab, setTab] = useState("list");
+  const [showPlayerModal, setShowPlayerModal] = useState(false);
   const [player, setPlayer] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -258,6 +314,9 @@ export default function Games({ setAnalysis, analysis }) {
 
   return (
     <div>
+      {showPlayerModal && (
+        <PlayerFairPlayModal onClose={() => setShowPlayerModal(false)} />
+      )}
       <div className="games-appbar">
         <button
           className={`btn ${tab === "list" ? "btn-primary" : "btn-secondary"}`}
@@ -270,6 +329,14 @@ export default function Games({ setAnalysis, analysis }) {
           onClick={() => setTab("explorer")}
         >
           Opening Tree
+        </button>
+        <button
+          className="btn btn-secondary"
+          style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 10px", fontSize: 12, flexShrink: 0 }}
+          onClick={() => setShowPlayerModal(true)}
+        >
+          <ShieldAlert size={13} />
+          Check a Player
         </button>
 
         {tab === "list" && (

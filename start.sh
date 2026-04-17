@@ -33,7 +33,7 @@ echo ""
 # Start backend
 echo -e "${BLUE}Starting Backend (port 9001)${NC}"
 cd "$SCRIPT_DIR/backend"
-venv/bin/uvicorn main:app --host 0.0.0.0 --port 9001 &
+venv/bin/uvicorn main:app --host 0.0.0.0 --port 9001 --reload &
 BACKEND_PID=$!
 
 # Start frontend

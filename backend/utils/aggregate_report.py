@@ -21,36 +21,49 @@ class AggregateReport:
 
 
 def compute_aggregate_report(game_ids: list, side: str = "opponent") -> AggregateReport:
-    """Roll up per-game cheat reports. Uses cached DB reports; computes and caches for any missing."""
+    """Roll up per-game cheat reports. Uses cached DB reports; computes and caches for any missing.
+
+    Each game's metadata may contain a 'target_side' (set during batch import for
+    auto-detection). If present, that per-game side is used instead of `side`.
+    """
     _empty = AggregateReport(
-        game_count=0, overall_confidence="low", avg_fairness_score=0.0,
+        game_count=0,
+        overall_confidence="low",
+        avg_fairness_score=0.0,
         score_distribution={"low": 0, "medium": 0, "high": 0},
-        top_suspicious=[], accuracy_trend=[], baseline_trend=[],
-        disclaimer=DISCLAIMER, reporting_channels=list(REPORTING_CHANNELS),
+        top_suspicious=[],
+        accuracy_trend=[],
+        baseline_trend=[],
+        disclaimer=DISCLAIMER,
+        reporting_channels=list(REPORTING_CHANNELS),
     )
     if not game_ids:
         return _empty
 
-    cached = {r["game_id"]: r for r in database.list_cheat_reports_for_games(game_ids, side)}
+    cached = {
+        r["game_id"]: r for r in database.list_cheat_reports_for_games(game_ids, side)
+    }
 
     reports = []
     for game_id in game_ids:
-        if game_id in cached:
-            reports.append({"game_id": game_id, **cached[game_id]})
-            continue
-
         game = database.get_game(game_id)
         if not game:
+            continue
+
+        meta = game.get("metadata", {})
+        target_side = meta.get("target_side") or side
+
+        if game_id in cached and cached[game_id].get("side") == target_side:
+            reports.append({"game_id": game_id, **cached[game_id]})
             continue
 
         all_moves = game.get("moves") or []
         white_moves = [m for m in all_moves if (m.get("ply") or 0) % 2 == 1]
         black_moves = [m for m in all_moves if (m.get("ply") or 0) % 2 == 0]
-        target_moves = black_moves if side == "opponent" else white_moves
-        comp_moves = white_moves if side == "opponent" else black_moves
+        target_moves = black_moves if target_side == "black" else white_moves
+        comp_moves = white_moves if target_side == "black" else black_moves
 
-        meta = game.get("metadata", {})
-        elo_field = "blackElo" if side == "opponent" else "whiteElo"
+        elo_field = "blackElo" if target_side == "black" else "whiteElo"
         try:
             player_rating = int(meta.get(elo_field) or 0) or None
         except (ValueError, TypeError):
@@ -58,13 +71,14 @@ def compute_aggregate_report(game_ids: list, side: str = "opponent") -> Aggregat
 
         report = compute_cheat_report(
             analysis=target_moves,
-            side=side,
+            side=target_side,
             player_moves=comp_moves,
             player_rating=player_rating,
         )
         rd = report.to_dict()
         rd["game_id"] = game_id
-        database.upsert_cheat_report(game_id, side, rd, player_rating)
+        rd["side"] = target_side
+        database.upsert_cheat_report(game_id, target_side, rd, player_rating)
         reports.append(rd)
 
     if not reports:
@@ -108,7 +122,9 @@ def compute_aggregate_report(game_ids: list, side: str = "opponent") -> Aggregat
         {
             "game_id": r["game_id"],
             "cpl_zscore": (r.get("baseline") or {}).get("cpl_zscore", 0.0),
-            "over_performance": (r.get("baseline") or {}).get("over_performance", False),
+            "over_performance": (r.get("baseline") or {}).get(
+                "over_performance", False
+            ),
         }
         for r in reports
     ]
