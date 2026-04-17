@@ -479,6 +479,27 @@ def delete_game(game_id: int):
     conn.close()
 
 
+def delete_imported_games() -> int:
+    """Delete all games that were imported via online batch analysis (have analysis_depth set).
+    Also removes associated cheat reports. Returns count of games deleted."""
+    conn = _get_db()
+    game_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM games WHERE analysis_depth IS NOT NULL AND analysis_depth != ''"
+        ).fetchall()
+    ]
+    if game_ids:
+        placeholders = ",".join("?" * len(game_ids))
+        conn.execute(
+            f"DELETE FROM cheat_reports WHERE game_id IN ({placeholders})", game_ids
+        )
+        conn.execute(f"DELETE FROM games WHERE id IN ({placeholders})", game_ids)
+    conn.commit()
+    conn.close()
+    return len(game_ids)
+
+
 def get_opening_tree(fen: str, player_name: str = "") -> List[Dict]:
     norm = normalize_fen(fen)
     conn = _get_db()

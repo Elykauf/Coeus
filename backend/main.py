@@ -36,6 +36,7 @@ from database import (
     list_games,
     get_game as db_get_game,
     delete_game,
+    delete_imported_games,
     update_game_meta,
     get_opening_tree,
     get_games_for_move,
@@ -365,6 +366,13 @@ def db_delete_game(game_id: int):
     return {"status": "success"}
 
 
+@app.delete("/api/db/games/imported")
+def db_delete_imported_games():
+    """Delete all online-imported (batch analyzed) games and their cheat reports."""
+    count = delete_imported_games()
+    return {"status": "ok", "deleted": count}
+
+
 @app.post("/api/db/games/{game_id}/reanalyze")
 def db_reanalyze_game(game_id: int):
     """Clear analysis data and re-run Stockfish with the stored depth setting."""
@@ -595,6 +603,7 @@ async def enqueue_player_cheat_analysis(req: _CheatBatchReq):
         "username": req.username,
         "side": req.side,
         "depth": req.depth,
+        "games": req.games,
         "game_uuid": f"cheat_batch_{job_id}",
         "title": f"Fair-play: {req.username} ({req.platform})",
         "pgn": "",
@@ -1856,7 +1865,7 @@ def _run_cheat_batch_job(job: dict, cancel: threading.Event):
         save_job(job)
 
     raw_games = _fetch_games_sync(
-        platform, username, limit=req.games, on_progress=_on_fetch_progress
+        platform, username, limit=job.get("games", 25), on_progress=_on_fetch_progress
     )
     if not raw_games:
         job["status"] = "error"
@@ -2016,10 +2025,6 @@ def _run_queue_job(job: dict, cancel: threading.Event):
                 _broadcast_queue_threadsafe()
                 save_job(job)
                 return
-            print(
-                f"[QUEUE-ANALYSIS] ply={ply} san={board.san(move)} uci={move.uci()} fen_before={board.fen()}",
-                flush=True,
-            )
             job["progress"] = {
                 "percent": int((ply - 1) / total * 100),
                 "current_move": board.san(move),
@@ -2050,7 +2055,9 @@ def _run_queue_job(job: dict, cancel: threading.Event):
         if job.get("target_side"):
             game_json.setdefault("metadata", {})["target_side"] = job["target_side"]
         job["result_game_id"] = save_game(
-            game_json, analysis_depth=job.get("depth", "Standard"), hidden=bool(job.get("hidden"))
+            game_json,
+            analysis_depth=job.get("depth", "Standard"),
+            hidden=bool(job.get("hidden")),
         )
 
     job["progress"] = {
