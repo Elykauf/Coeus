@@ -1988,7 +1988,7 @@ def _run_queue_job(job: dict, cancel: threading.Event):
     if _queue_sf is None:
         _queue_sf = _build_stockfish(config)
 
-    tl = {"Quick": 0.15, "Fast": 0.5, "Standard": 2.0, "Deep": 10.0}.get(
+    tl = {"Quick": 0.3, "Fast": 0.5, "Standard": 2.0, "Deep": 10.0}.get(
         job["depth"], 2.0
     )
 

@@ -139,7 +139,7 @@ export default function PlayerFairPlayModal({ onClose, prefillJobId, prefillRepo
                 <div className="field-label" style={{ marginBottom: 6 }}>Depth</div>
                 <select className="appbar-input" style={{ width: '100%', padding: '7px 10px' }}
                   value={depth} onChange={e => setDepth(e.target.value)}>
-                  <option value="Quick">Quick (0.15s)</option>
+                  <option value="Quick">Quick (0.3s)</option>
                   <option value="Fast">Fast (0.5s)</option>
                   <option value="Standard">Standard (2s)</option>
                   <option value="Deep">Deep (10s)</option>
