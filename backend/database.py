@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import json
 import time
@@ -23,8 +24,41 @@ def _get_db():
     return conn
 
 
+def _run_migration(conn, migration_id: str, sql: str):
+    """Run a migration SQL statement only if it hasn't already been applied."""
+    existing = conn.execute(
+        "SELECT 1 FROM _schema_migrations WHERE migration_id=?", (migration_id,)
+    ).fetchone()
+    if existing:
+        return
+    try:
+        conn.execute(sql)
+    except Exception as e:
+        if "duplicate column name" in str(e) or "already exists" in str(e):
+            pass  # Column/index already exists — treat as applied
+        else:
+            logging.warning(f"[db] Migration {migration_id} failed: {e}")
+            return
+    conn.execute(
+        "INSERT INTO _schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+        (migration_id, time.time()),
+    )
+    conn.commit()
+    logging.info(f"[db] Applied migration: {migration_id}")
+
+
 def init_db():
     conn = _get_db()
+
+    # Migration tracking table — must be created first
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS _schema_migrations (
+            migration_id TEXT PRIMARY KEY,
+            applied_at   REAL NOT NULL
+        )
+    """)
+
+    # ── Base schema ─────────────────────────────────────────────────────────────
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS position_cache (
             hash        INTEGER PRIMARY KEY,
@@ -34,7 +68,7 @@ def init_db():
             engine_depth INTEGER,
             updated_at  REAL
         );
-        
+
         CREATE TABLE IF NOT EXISTS games (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             uuid        TEXT,
@@ -69,25 +103,92 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_moves_fen_before ON game_moves(fen_before);
         CREATE INDEX IF NOT EXISTS idx_moves_game_id   ON game_moves(game_id);
+
+        CREATE TABLE IF NOT EXISTS move_variations (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            ply         INTEGER NOT NULL,
+            variation_index INTEGER NOT NULL DEFAULT 0,
+            moves       TEXT NOT NULL,
+            eval_cp     INTEGER,
+            name        TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_variations_game ON move_variations(game_id, ply);
+
+        CREATE TABLE IF NOT EXISTS cheat_reports (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id      INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            side         TEXT    NOT NULL,
+            player_rating INTEGER,
+            fairness_score REAL  NOT NULL,
+            confidence   TEXT    NOT NULL,
+            report_json  TEXT    NOT NULL,
+            created_at   REAL    NOT NULL,
+            UNIQUE(game_id, side)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cheat_reports_confidence ON cheat_reports(confidence);
+        CREATE INDEX IF NOT EXISTS idx_cheat_reports_game ON cheat_reports(game_id);
     """)
     conn.commit()
 
-    # Migration: add uuid column to existing databases
-    try:
-        conn.execute("ALTER TABLE games ADD COLUMN uuid TEXT")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
+    # ── Schema migrations (tracked) ─────────────────────────────────────────────
+    _run_migration(conn, "games_uuid", "ALTER TABLE games ADD COLUMN uuid TEXT")
+    _run_migration(
+        conn,
+        "idx_games_uuid",
+        "CREATE UNIQUE INDEX idx_games_uuid ON games(uuid) WHERE uuid IS NOT NULL",
+    )
+    _run_migration(
+        conn, "games_updated_at", "ALTER TABLE games ADD COLUMN updated_at REAL"
+    )
+    _run_migration(
+        conn,
+        "game_moves_zobrist_before",
+        "ALTER TABLE game_moves ADD COLUMN zobrist_before INTEGER",
+    )
+    _run_migration(
+        conn,
+        "game_moves_zobrist_after",
+        "ALTER TABLE game_moves ADD COLUMN zobrist_after INTEGER",
+    )
+    _run_migration(
+        conn, "games_analysis_depth", "ALTER TABLE games ADD COLUMN analysis_depth TEXT"
+    )
+    _run_migration(
+        conn,
+        "games_raw_pgn",
+        "ALTER TABLE games ADD COLUMN raw_pgn TEXT NOT NULL DEFAULT ''",
+    )
+    _run_migration(
+        conn,
+        "games_opening",
+        "ALTER TABLE games ADD COLUMN opening TEXT NOT NULL DEFAULT ''",
+    )
+    _run_migration(
+        conn,
+        "games_last_fen",
+        "ALTER TABLE games ADD COLUMN last_fen TEXT NOT NULL DEFAULT ''",
+    )
+    _run_migration(
+        conn, "game_moves_comments", "ALTER TABLE game_moves ADD COLUMN comments TEXT"
+    )
+    _run_migration(
+        conn,
+        "game_moves_key_moment",
+        "ALTER TABLE game_moves ADD COLUMN key_moment INTEGER",
+    )
+    _run_migration(
+        conn,
+        "game_moves_key_moment_label",
+        "ALTER TABLE game_moves ADD COLUMN key_moment_label TEXT",
+    )
+    _run_migration(
+        conn,
+        "games_hidden",
+        "ALTER TABLE games ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+    )
 
-    try:
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_uuid ON games(uuid) WHERE uuid IS NOT NULL"
-        )
-        conn.commit()
-    except Exception:
-        pass
-
-    # Backfill UUIDs for existing rows
+    # ── Data backfills (run every startup — idempotent) ────────────────────────
     rows = conn.execute("SELECT id FROM games WHERE uuid IS NULL").fetchall()
     for row in rows:
         conn.execute(
@@ -96,139 +197,27 @@ def init_db():
     if rows:
         conn.commit()
 
-    # Migration: add updated_at column
-    try:
-        conn.execute("ALTER TABLE games ADD COLUMN updated_at REAL")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-
-    # Backfill updated_at from created_at for existing rows
     conn.execute("UPDATE games SET updated_at = created_at WHERE updated_at IS NULL")
     conn.commit()
 
-    # Migration: add zobrist columns to game_moves
-    try:
-        conn.execute("ALTER TABLE game_moves ADD COLUMN zobrist_before INTEGER")
+    rows = conn.execute(
+        "SELECT id, data FROM games WHERE (raw_pgn = '' OR opening = '' OR last_fen = '') AND data != ''"
+    ).fetchall()
+    for row in rows:
+        try:
+            d = json.loads(row["data"])
+            raw_pgn = d.get("raw_pgn", "") or ""
+            opening = d.get("metadata", {}).get("opening", "") or ""
+            moves = d.get("moves", [])
+            last_fen = moves[-1].get("fenAfter", "") if moves else ""
+            conn.execute(
+                "UPDATE games SET raw_pgn=?, opening=?, last_fen=? WHERE id=?",
+                (raw_pgn, opening, last_fen, row["id"]),
+            )
+        except Exception:
+            pass
+    if rows:
         conn.commit()
-    except Exception:
-        pass  # Column already exists
-    try:
-        conn.execute("ALTER TABLE game_moves ADD COLUMN zobrist_after INTEGER")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-
-    # Migration: add analysis_depth column to games
-    try:
-        conn.execute("ALTER TABLE games ADD COLUMN analysis_depth TEXT")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-
-    # Migration: add raw_pgn, opening, last_fen columns to games (avoid loading data blob for list)
-    try:
-        conn.execute("ALTER TABLE games ADD COLUMN raw_pgn TEXT NOT NULL DEFAULT ''")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-    try:
-        conn.execute("ALTER TABLE games ADD COLUMN opening TEXT NOT NULL DEFAULT ''")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-    try:
-        conn.execute("ALTER TABLE games ADD COLUMN last_fen TEXT NOT NULL DEFAULT ''")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-
-    # Backfill: populate new columns for any existing rows that have a data blob but empty new columns
-    # This runs once on startup for any pre-existing games.
-    try:
-        rows = conn.execute(
-            "SELECT id, data FROM games WHERE (raw_pgn = '' OR opening = '' OR last_fen = '') AND data != ''"
-        ).fetchall()
-        for row in rows:
-            try:
-                d = json.loads(row["data"])
-                raw_pgn = d.get("raw_pgn", "") or ""
-                opening = d.get("metadata", {}).get("opening", "") or ""
-                moves = d.get("moves", [])
-                last_fen = moves[-1].get("fenAfter", "") if moves else ""
-                conn.execute(
-                    "UPDATE games SET raw_pgn=?, opening=?, last_fen=? WHERE id=?",
-                    (raw_pgn, opening, last_fen, row["id"]),
-                )
-            except Exception:
-                pass
-        if rows:
-            conn.commit()
-    except Exception:
-        pass
-
-    # Migration: add annotation columns to game_moves
-    try:
-        conn.execute("ALTER TABLE game_moves ADD COLUMN comments TEXT")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-
-    try:
-        conn.execute("ALTER TABLE game_moves ADD COLUMN key_moment INTEGER")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-
-    try:
-        conn.execute("ALTER TABLE game_moves ADD COLUMN key_moment_label TEXT")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-    try:
-        conn.execute("ALTER TABLE games ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
-
-    # Create variations table
-    try:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS move_variations (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-                ply         INTEGER NOT NULL,
-                variation_index INTEGER NOT NULL DEFAULT 0,
-                moves       TEXT NOT NULL,
-                eval_cp     INTEGER,
-                name        TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_variations_game ON move_variations(game_id, ply);
-        """)
-        conn.commit()
-    except Exception:
-        pass  # Table already exists
-
-    # Create cheat_reports table
-    try:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS cheat_reports (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id      INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-                side         TEXT    NOT NULL,
-                player_rating INTEGER,
-                fairness_score REAL  NOT NULL,
-                confidence   TEXT    NOT NULL,
-                report_json  TEXT    NOT NULL,
-                created_at   REAL    NOT NULL,
-                UNIQUE(game_id, side)
-            );
-            CREATE INDEX IF NOT EXISTS idx_cheat_reports_confidence ON cheat_reports(confidence);
-            CREATE INDEX IF NOT EXISTS idx_cheat_reports_game ON cheat_reports(game_id);
-        """)
-        conn.commit()
-    except Exception:
-        pass
 
     conn.close()
 
