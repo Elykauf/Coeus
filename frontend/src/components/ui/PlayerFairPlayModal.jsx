@@ -4,7 +4,7 @@ import AggregateFairPlayPanel from './AggregateFairPlayPanel'
 
 const CONFIDENCE_COLOR = { low: '#4caf8c', medium: '#F59E0B', high: '#EF4444' }
 
-export default function PlayerFairPlayModal({ onClose, prefillJobId, prefillReport, prefillTitle }) {
+export default function PlayerFairPlayModal({ onClose, onComplete, prefillJobId, prefillReport, prefillTitle }) {
   const [phase, setPhase] = useState(prefillJobId ? 'live' : 'form')   // 'form' | 'live'
   const [platform, setPlatform] = useState('chesscom')
   const [username, setUsername] = useState('')
@@ -15,6 +15,7 @@ export default function PlayerFairPlayModal({ onClose, prefillJobId, prefillRepo
   const [error, setError] = useState(null)
   const wsRef = useRef(null)
   const reconnectRef = useRef(null)
+  const completedRef = useRef(false)
 
   // WebSocket subscription — only active during live phase
   useEffect(() => {
@@ -28,7 +29,13 @@ export default function PlayerFairPlayModal({ onClose, prefillJobId, prefillRepo
       ws.onmessage = (e) => {
         const jobs = JSON.parse(e.data)
         const found = jobs.find(j => j.job_id === jobId)
-        if (found) setJob(found)
+        if (found) {
+          setJob(found)
+          if (found.status === 'done' && !completedRef.current) {
+            completedRef.current = true
+            onComplete?.()
+          }
+        }
       }
       ws.onclose = () => {
         wsRef.current = null

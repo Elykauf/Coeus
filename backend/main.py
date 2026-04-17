@@ -1913,6 +1913,7 @@ def _run_cheat_batch_job(job: dict, cancel: threading.Event):
             "error": None,
             "result_game_id": None,
             "target_side": target_side,
+            "hidden": True,
         }
 
         try:
@@ -2049,7 +2050,7 @@ def _run_queue_job(job: dict, cancel: threading.Event):
         if job.get("target_side"):
             game_json.setdefault("metadata", {})["target_side"] = job["target_side"]
         job["result_game_id"] = save_game(
-            game_json, analysis_depth=job.get("depth", "Standard")
+            game_json, analysis_depth=job.get("depth", "Standard"), hidden=bool(job.get("hidden"))
         )
 
     job["progress"] = {

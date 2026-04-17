@@ -185,6 +185,11 @@ def init_db():
         conn.commit()
     except Exception:
         pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE games ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
 
     # Create variations table
     try:
@@ -275,7 +280,7 @@ def _insert_moves(conn, game_id: int, game_json: dict):
         prev_zobrist = curr_zobrist
 
 
-def save_game(game_json: dict, analysis_depth: str = None) -> int:
+def save_game(game_json: dict, analysis_depth: str = None, hidden: bool = False) -> int:
     game_uuid = game_json.get("uuid")
     conn = _get_db()
     meta = game_json.get("metadata", {})
@@ -331,9 +336,9 @@ def save_game(game_json: dict, analysis_depth: str = None) -> int:
             """UPDATE games
                SET uuid=?, title=?, event=?, site=?, date=?, white=?, black=?,
                    result=?, eco=?, time_control=?, data=?, analysis_depth=?,
-                   raw_pgn=?, opening=?, last_fen=?, updated_at=?
+                   raw_pgn=?, opening=?, last_fen=?, updated_at=?, hidden=?
                WHERE id=?""",
-            (game_uuid,) + row_cols + (now, game_id),
+            (game_uuid,) + row_cols + (now, int(hidden), game_id),
         )
         # Only replace moves if new analysis data is actually provided;
         # otherwise preserve the existing engine evaluation (eval_cp, cpl).
@@ -343,9 +348,9 @@ def save_game(game_json: dict, analysis_depth: str = None) -> int:
         cursor = conn.execute(
             """INSERT INTO games
                    (uuid, title, event, site, date, white, black, result, eco, time_control,
-                    data, analysis_depth, raw_pgn, opening, last_fen, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (game_uuid,) + row_cols + (now, now),
+                    data, analysis_depth, raw_pgn, opening, last_fen, created_at, updated_at, hidden)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (game_uuid,) + row_cols + (now, now, int(hidden)),
         )
         game_id = cursor.lastrowid
 
@@ -381,6 +386,7 @@ def list_games(
         conditions.append("(site = '' OR site IS NULL)")
     if analyzed is True:
         conditions.append("analysis_depth IS NOT NULL AND analysis_depth != ''")
+    conditions.append("(hidden = 0 OR hidden IS NULL)")
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     rows = conn.execute(
         f"""SELECT id, uuid, title, event, site, date, white, black, result, eco,

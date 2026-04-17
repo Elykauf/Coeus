@@ -27,7 +27,7 @@ function GameList({
 }) {
   const navigate = useNavigate();
   const boardColors = useBoardColors();
-  const { games, loading, updateResult } = useGameFetch({
+  const { games, loading, fetchGames, updateResult } = useGameFetch({
     dateFrom,
     dateTo,
     player,
@@ -315,7 +315,7 @@ export default function Games({ setAnalysis, analysis }) {
   return (
     <div>
       {showPlayerModal && (
-        <PlayerFairPlayModal onClose={() => setShowPlayerModal(false)} />
+        <PlayerFairPlayModal onClose={() => setShowPlayerModal(false)} onComplete={fetchGames} />
       )}
       <div className="games-appbar">
         <button
